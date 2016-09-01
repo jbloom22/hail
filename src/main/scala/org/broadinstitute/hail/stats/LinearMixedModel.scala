@@ -9,36 +9,35 @@ class DiagLMM(X: DenseMatrix[Double], y: DenseVector[Double], invD: DenseVector[
   val n = X.rows
   require(n == y.length)
 
-  def likelihoodRatioTest(dy: DenseVector[Double], ydy: Double, nullStat: Double): LMMStats = {
-    // require x to vary
-
-    val xdx = X.t * (X(::,*) :* invD)
-    val xdy = X.t * dy
-    val b =  xdx \ xdy
-    val nSigmaGSq = ydy - (xdy dot b)
-    val chi2 = n * (nullStat - log(nSigmaGSq))
-    // val chi2 = xdy dot b // BoltLMM
+  def likelihoodRatioTest(dy: DenseVector[Double], ydy: Double, logNullS2: Double): LMMStats = {
+    val (b, s2) = fit(dy, ydy)
+    val chi2 = n * (logNullS2 - log(s2))
     val p = chiSquaredTail(1, chi2)
-    LMMStats(b, chi2, p)
+
+    LMMStats(b, s2, chi2, p)
   }
 
-  def getLogNSigmaGSq(dy: DenseVector[Double], ydy: Double): Double = {
+  def fit(dy: DenseVector[Double], ydy: Double): (DenseVector[Double], Double) = {
     val xdx = X.t * (X(::, *) :* invD)
     val xdy = X.t * dy
     val b = xdx \ xdy
+    val s2 = (ydy - (xdy dot b)) / n
 
-    log(ydy - (xdy dot b))
-  }
-
-  def getChi2(dy: DenseVector[Double], ydy: Double): Double = {
-    val xdx = X.t * (X(::, *) :* invD)
-    val xdy = X.t * dy
-    val b = xdx \ xdy
-
-    xdy dot b // BoltLMM
+    (b, s2)
   }
 
   def chiSquaredTail(df: Double, x: Double) = Gamma.regularizedGammaQ(df / 2, x / 2)
+
+  // val c = X.cols
+  // val chi2 = (n - c) * (nullRss / rss - 1) // R
+  // val chi2 = xdy dot b // BoltLMM
 }
 
-case class LMMStats(b: DenseVector[Double], chi2: Double, p: Double)
+//class LMM(X: DenseMatrix[Double], y: DenseVector[Double], Ut: DenseMatrix[Double], S: DenseVector[Double], delta: Double) {
+//  val invD = (S :+ delta).map(1 / _)
+//
+//  DiagLMM(Ut * X, Ut * y, invD)
+//}
+
+
+case class LMMStats(b: DenseVector[Double], s2: Double, chi2: Double, p: Double)
