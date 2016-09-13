@@ -3,6 +3,7 @@ package org.broadinstitute.hail.stats
 import breeze.linalg._
 import breeze.stats.{mean, stddev}
 import breeze.numerics.log
+import breeze.stats.distributions.MultivariateGaussian
 import org.broadinstitute.hail.SparkSuite
 import org.testng.annotations.Test
 
@@ -94,5 +95,44 @@ class LinearMixedModelSuite extends SparkSuite {
 
     println()
     results.foreach(println)
+  }
+
+  @Test def genAndFitLMMTest() {
+
+    val n = 5
+    val c = 3
+
+    def distC0 = MultivariateGaussian(DenseVector.zeros[Double](c - 1), DenseMatrix.eye[Double](c - 1))
+
+    val C0 = DenseMatrix.vertcat(distC0.sample(n).map(_.asDenseMatrix): _*)
+
+    println(C0.rows, C0.cols)
+
+    val C = DenseMatrix.horzcat(DenseMatrix.ones[Double](n, 1), C0)
+
+    def b = DenseVector(0.5, 2.0, -3.0)
+
+    val r = new scala.util.Random
+    var s = 0d
+
+    val K = DenseMatrix.eye[Double](n)
+    for (i <- 0 until n - 1) {
+      s = r.nextDouble()
+      K(i, i + 1) = s
+      K(i + 1, i) = s
+    }
+
+    val svdK = svd(K)
+    println(svdK)
+
+    def sigmaGSq = 1d
+    def delta = 1d
+    def V = sigmaGSq * (K + delta * DenseMatrix.eye[Double](n))
+
+    def distY = MultivariateGaussian(C * b, V)
+
+    def y = distY.sample()
+
+
   }
 }
