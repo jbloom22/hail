@@ -1,9 +1,9 @@
 package org.broadinstitute.hail.stats
 
 import breeze.linalg._
-import breeze.stats.{mean, stddev}
+import breeze.stats.mean
 import breeze.numerics.log
-import breeze.stats.distributions.MultivariateGaussian
+import breeze.stats.distributions.{MultivariateGaussian, Rand}
 import org.broadinstitute.hail.SparkSuite
 import org.testng.annotations.Test
 
@@ -98,41 +98,58 @@ class LinearMixedModelSuite extends SparkSuite {
   }
 
   @Test def genAndFitLMMTest() {
+    val n = 1000 // even
+    val m = 100
+    val c = 5
+    def b = DenseVector(2.0, 1.0, 0.0, -1.0, -2.0)  // length is c
 
-    val n = 5
-    val c = 3
+    val C0 = DenseMatrix.horzcat(DenseMatrix.ones[Double](n, 1), DenseMatrix.fill[Double](n, c - 1)(Rand.gaussian.draw()))
 
-    def distC0 = MultivariateGaussian(DenseVector.zeros[Double](c - 1), DenseMatrix.eye[Double](c - 1))
+    val W = DenseMatrix.vertcat(DenseMatrix.fill[Double](n / 2, m)(Rand.gaussian.draw()), DenseMatrix.fill[Double](n / 2, m)(Rand.gaussian.draw()) + .5)
 
-    val C0 = DenseMatrix.vertcat(distC0.sample(n).map(_.asDenseMatrix): _*)
-
-    println(C0.rows, C0.cols)
-
-    val C = DenseMatrix.horzcat(DenseMatrix.ones[Double](n, 1), C0)
-
-    def b = DenseVector(0.5, 2.0, -3.0)
-
-    val r = new scala.util.Random
-    var s = 0d
-
-    val K = DenseMatrix.eye[Double](n)
-    for (i <- 0 until n - 1) {
-      s = r.nextDouble()
-      K(i, i + 1) = s
-      K(i + 1, i) = s
+    for (i <- 0 until W.cols) {
+      W(::,i) -= mean(W(::,i))
+      W(::,i) /= norm(W(::,i))
     }
 
-    val svdK = svd(K)
-    println(svdK)
+    val K = W * W.t
+
+    val svdW = svd(W)
 
     def sigmaGSq = 1d
     def delta = 1d
     def V = sigmaGSq * (K + delta * DenseMatrix.eye[Double](n))
 
-    def distY = MultivariateGaussian(C * b, V)
+    def distY0 = MultivariateGaussian(C0 * b, V)
 
-    def y = distY.sample()
+    def y0 = distY0.sample()
 
+    val Ut = svdW.U.t
+    val S = svdW.S.padTo(n, 0).toDenseVector
+
+    val y = Ut * y0
+    val C = Ut * C0
+
+    val deltaFit = delta
+    // val deltaFit = findDelta(y, C)
+
+    val invD = S.map(s => 1 / (s * s + deltaFit))
+    val dy = invD :* y
+    val ydy = y dot dy
+    val nullModel = new DiagLMM(C, y, invD)
+    val (nullB, nullS2) = nullModel.fit(dy, ydy)
+
+    println("delta:")
+    println(delta)
+    println(deltaFit)
+    println()
+    println("sigmaG2:")
+    println(sigmaGSq)
+    println(nullS2)
+
+    println()
+    println("b")
+    (0 until c).foreach(i => println(s"$i: ${b(i)}, ${nullB(i)}"))
 
   }
 }
