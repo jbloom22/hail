@@ -4,7 +4,31 @@ import breeze.linalg._
 import org.apache.commons.math3.special.Gamma
 import breeze.numerics._
 
-// for FaST-LMM, dInv = vector with ith element 1 / (S_ii + delta)
+class DiagLMMDelta(X: DenseMatrix[Double], y: DenseVector[Double], S: DenseVector[Double]) {
+
+  def logLkhdPlusConstant(delta: Double) = {
+    val n = y.length
+    val D = S + delta
+    val dy = y :/ D
+
+    val xdx = X.t * (X(::, *) :/ D)
+    val xdy = X.t * dy
+    val ydy = y dot dy
+    val b = xdx \ xdy
+    val s2 = (ydy - (xdy dot b)) / n
+
+    sum(log(D)) + n * math.log(s2)
+  }
+}
+
+
+// DiagLMM is model of this form with D known and diagonal: y ~ N(X * b, sigmaGSq * D)
+// invD is the diagonal of the inverse of D.
+// DiagLMM arises by diagonalizing variance of LMM: y0 ~ N(X0 * b, sigmaGSq * (K + delta * Id))
+// SVD of kernel K = U * S * U.t
+// Set y = U.t * y0, X = U.t * X0, D = S + delta * Id
+// In this case, invD has ith element 1 / (S_ii + delta)
+
 class DiagLMM(X: DenseMatrix[Double], y: DenseVector[Double], invD: DenseVector[Double]) {
   val n = X.rows
   require(n == y.length)
@@ -32,12 +56,5 @@ class DiagLMM(X: DenseMatrix[Double], y: DenseVector[Double], invD: DenseVector[
   // val chi2 = (n - c) * (nullRss / rss - 1) // R
   // val chi2 = xdy dot b // BoltLMM
 }
-
-//class LMM(X: DenseMatrix[Double], y: DenseVector[Double], Ut: DenseMatrix[Double], S: DenseVector[Double], delta: Double) {
-//  val invD = (S :+ delta).map(1 / _)
-//
-//  DiagLMM(Ut * X, Ut * y, invD)
-//}
-
 
 case class LMMStats(b: DenseVector[Double], s2: Double, chi2: Double, p: Double)
