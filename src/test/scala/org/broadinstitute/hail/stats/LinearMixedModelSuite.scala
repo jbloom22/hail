@@ -2,8 +2,8 @@ package org.broadinstitute.hail.stats
 
 import breeze.linalg._
 import breeze.stats.mean
-import breeze.numerics.log
-import breeze.stats.distributions.{MultivariateGaussian, Rand}
+import breeze.stats.distributions._
+import org.apache.commons.math3.random.MersenneTwister
 import org.broadinstitute.hail.SparkSuite
 import org.testng.annotations.Test
 
@@ -19,20 +19,15 @@ class LinearMixedModelSuite extends SparkSuite {
       (1.0, -2.0, -4.0),
       (1.0, 4.0, 3.0))
 
-    val gts = DenseVector(0d, 1d, 2d, 0d, 0d, 1d)
-    val X = DenseMatrix.horzcat(gts.asDenseMatrix.t, C)
     val y = DenseVector(0d, 0d, 1d, 1d, 1d, 1d)
+    val S = DenseVector(1d, 1d, 1d, 1d, 1d, 1d)
+    val delta = 1
 
-    val invD = DenseVector(1d, 1d, 1d, 1d, 1d, 1d)
+    val model = DiagLMM(C, y, S, Some(delta))
 
-    val dy = invD :* y
-    val ydy = y dot dy
+    val gts = DenseVector(0d, 1d, 2d, 0d, 0d, 1d)
 
-    val nullModel = new DiagLMM(C, y, invD)
-    val (nullB, nullS2) = nullModel.fit(dy, ydy)
-
-    val model = new DiagLMM(X, y, invD)
-    val stats = model.likelihoodRatioTest(dy, ydy, log(nullS2))
+    val stats = model.likelihoodRatioTest(gts)
 
     println(stats)
   }
@@ -69,7 +64,7 @@ class LinearMixedModelSuite extends SparkSuite {
 
     val svdW = svd(W)
     val Ut = svdW.U.t
-    val S = svdW.S.padTo(n, 0).toDenseVector
+    val S = (svdW.S :* svdW.S).padTo(n, 0).toDenseVector
 
     val y = Ut * y0
     val C = Ut * C0
@@ -77,35 +72,29 @@ class LinearMixedModelSuite extends SparkSuite {
 //  val delta = findDelta(y, C)
     val delta = 1d
 
-    val invD = S.map(s => 1 / (s * s + delta))
-    val dy = invD :* y
-    val ydy = y dot dy
-
-    val nullModel = new DiagLMM(C, y, invD)
-    val (nullB, nullS2) = nullModel.fit(dy, ydy)
-    val logNullS2 = log(nullS2)
+    val model = DiagLMM(C, y, S, Some(delta))
 
     val results: Map[Int, LMMStats] = (0 until m).map { v =>
-      val gts = G(::, v to v)
-      val X = DenseMatrix.horzcat(Ut * gts, C)
-      val model = new DiagLMM(X, y, invD)
-      val stats = model.likelihoodRatioTest(dy, ydy, logNullS2)
+      val gts = G(::, v to v).toDenseVector
+      val stats = model.likelihoodRatioTest(gts)
       (v, stats)
     }.toMap
 
-    println()
     results.foreach(println)
   }
 
   @Test def genAndFitLMMTest() {
+    val seed = 0
+    implicit val rand: RandBasis = new RandBasis(new ThreadLocalRandomGenerator(new MersenneTwister(seed)))
+
     val n = 1000 // even
-    val m = 100
+    val m = 2000
     val c = 5
     def b = DenseVector(2.0, 1.0, 0.0, -1.0, -2.0)  // length is c
 
-    val C0 = DenseMatrix.horzcat(DenseMatrix.ones[Double](n, 1), DenseMatrix.fill[Double](n, c - 1)(Rand.gaussian.draw()))
+    val C0 = DenseMatrix.horzcat(DenseMatrix.ones[Double](n, 1), DenseMatrix.fill[Double](n, c - 1)(rand.gaussian.draw()))
 
-    val W = DenseMatrix.vertcat(DenseMatrix.fill[Double](n / 2, m)(Rand.gaussian.draw()), DenseMatrix.fill[Double](n / 2, m)(Rand.gaussian.draw()) + .5)
+    val W = DenseMatrix.vertcat(DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()), DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()) + .5)
 
     for (i <- 0 until W.cols) {
       W(::,i) -= mean(W(::,i))
@@ -120,36 +109,29 @@ class LinearMixedModelSuite extends SparkSuite {
     def delta = 1d
     def V = sigmaGSq * (K + delta * DenseMatrix.eye[Double](n))
 
-    def distY0 = MultivariateGaussian(C0 * b, V)
+    def distY0 = MultivariateGaussian(C0 * b, V)(rand)
 
     def y0 = distY0.sample()
 
     val Ut = svdW.U.t
-    val S = svdW.S.padTo(n, 0).toDenseVector
+    val S = (svdW.S :* svdW.S).padTo(n, 0).toDenseVector // square singular values of W to get eigenvalues of K
 
     val y = Ut * y0
     val C = Ut * C0
 
-    val deltaFit = delta
-    // val deltaFit = findDelta(y, C)
-
-    val invD = S.map(s => 1 / (s * s + deltaFit))
-    val dy = invD :* y
-    val ydy = y dot dy
-    val nullModel = new DiagLMM(C, y, invD)
-    val (nullB, nullS2) = nullModel.fit(dy, ydy)
+    // val model = DiagLMM(C, y, S, Some(delta))
+    val model = DiagLMM(C, y, S)
 
     println("delta:")
     println(delta)
-    println(deltaFit)
+    println(model.delta)
     println()
-    println("sigmaG2:")
+    println("s2:")
     println(sigmaGSq)
-    println(nullS2)
+    println(model.nullS2)
 
     println()
     println("b")
-    (0 until c).foreach(i => println(s"$i: ${b(i)}, ${nullB(i)}"))
-
+    (0 until c).foreach(i => println(s"$i: ${b(i)}, ${model.nullB(i)}"))
   }
 }
