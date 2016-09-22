@@ -40,3 +40,35 @@ object ToStandardizedIndexedRowMatrix {
   }
 
 }
+
+object ToIndexedRowMatrix {
+  def apply(vds: VariantDataset): (Array[Variant], IndexedRowMatrix) = {
+    val variants = vds.variants.collect()
+    val nVariants = variants.length
+    val nSamples = vds.nSamples
+    val variantIdxBroadcast = vds.sparkContext.broadcast(variants.index)
+
+    val matrix = vds
+      .rdd
+      .map { case (v, (va, gs)) =>
+        val (count, sum) = gs.foldLeft((0, 0)) { case ((c, s), g) =>
+          g.nNonRefAlleles match {
+            case Some(n) => (c + 1, s + n)
+            case None => (c, s)
+          }
+        }
+
+        // FIXME: should filter constant and all missing here? Right now, all missing goes to all zeros.
+        val p =
+          if (count == 0) 0.0
+          else sum.toDouble / (2 * count)
+        val mean = 2 * p
+
+        IndexedRow(variantIdxBroadcast.value(v),
+          Vectors.dense(gs.iterator.map(_.nNonRefAlleles.map(_.toDouble).getOrElse(mean)).toArray))
+      }
+
+    (variants, new IndexedRowMatrix(matrix.cache(), nVariants, nSamples))
+  }
+
+}
