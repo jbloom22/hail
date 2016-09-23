@@ -90,8 +90,8 @@ class LinearMixedModelSuite extends SparkSuite {
     val seed = 1
     implicit val rand: RandBasis = new RandBasis(new ThreadLocalRandomGenerator(new MersenneTwister(seed)))
 
-    val n = 100 // even
-    val m = 200
+    val n = 1000 // even
+    val m = 1000
     val c = 5
     def b = DenseVector(2.0, 1.0, 0.0, -1.0, -2.0)  // length is c
 
@@ -138,15 +138,15 @@ class LinearMixedModelSuite extends SparkSuite {
     (0 until c).foreach(i => println(s"$i: ${b(i)}, ${model.nullB(i)}"))
   }
 
-  @Test def genAndFitLMMTestIndexedRowMatrix() {
+  @Test def genAndFitLMMTestDist() {
     val seed = 1
     implicit val rand: RandBasis = new RandBasis(new ThreadLocalRandomGenerator(new MersenneTwister(seed)))
 
-    val n = 100 // even
-    val m = 200
+    val n = 1000 // even
+    val m = 1000
     val variantIdx = 0 until m
     val variants = (0 until m).map(i => Variant("1", i, "A", "C")).toArray
-    val k = 100
+    val k = n
     val c = 5
 
     def b = DenseVector(2.0, 1.0, 0.0, -1.0, -2.0)  // length is c
@@ -184,6 +184,66 @@ class LinearMixedModelSuite extends SparkSuite {
     val lmmResult = LMM(Wt, variants, genotypes, C0, y0, k, None)
 
     val model = lmmResult.diagLMM
+
+    println("delta:")
+    println(delta)
+    println(model.delta)
+    println()
+    println("s2:")
+    println(sigmaGSq)
+    println(model.nullS2)
+
+    println()
+    println("b")
+    (0 until c).foreach(i => println(s"$i: ${b(i)}, ${model.nullB(i)}"))
+  }
+
+  @Test def genAndFitLMMTestDistLowRank() {
+    val seed = 1
+    implicit val rand: RandBasis = new RandBasis(new ThreadLocalRandomGenerator(new MersenneTwister(seed)))
+
+    val n = 1000 // even
+    val m = 1000
+    val variantIdx = 0 until m
+    val variants = (0 until m).map(i => Variant("1", i, "A", "C")).toArray
+    val k = 3
+    val c = 5
+
+    def b = DenseVector(2.0, 1.0, 0.0, -1.0, -2.0)  // length is c
+
+    val C0 = DenseMatrix.horzcat(DenseMatrix.ones[Double](n, 1), DenseMatrix.fill[Double](n, c - 1)(rand.gaussian.draw()))
+
+    val W = DenseMatrix.vertcat(DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()), DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()) + .5)
+
+    for (i <- 0 until W.cols) {
+      W(::,i) -= mean(W(::,i))
+      W(::,i) /= norm(W(::,i))
+    }
+
+    val K = W * W.t
+
+    val svdW = svd(W)
+
+    def sigmaGSq = 1d
+    def delta = 1d
+    def V = sigmaGSq * (K + delta * DenseMatrix.eye[Double](n))
+
+    def distY0 = MultivariateGaussian(C0 * b, V)(rand)
+
+    def y0 = distY0.sample()
+
+    val Ut = svdW.U.t
+    val S = (svdW.S :* svdW.S).padTo(n, 0).toDenseVector // square singular values of W to get eigenvalues of K
+
+    val Wcols = (0 until W.cols).map(j => IndexedRow(j, toSDenseVector(W(::, j))))
+
+    val Wt = new IndexedRowMatrix(sc.makeRDD(Wcols), m, n)
+
+    val genotypes = new IndexedRowMatrix(sc.makeRDD(IndexedSeq[IndexedRow]()), 0, n)
+
+    val lmmResultLowRank = LMMLowRank(Wt, variants, genotypes, C0, y0, k, None)
+
+    val model = lmmResultLowRank.diagLMMLowRank
 
     println("delta:")
     println(delta)
