@@ -1,9 +1,10 @@
 package org.broadinstitute.hail.methods
 
+import breeze.linalg.{DenseMatrix, DenseVector}
 import org.apache.spark.mllib.linalg.Vectors
 import org.apache.spark.mllib.linalg.distributed.{IndexedRow, IndexedRowMatrix}
 import org.broadinstitute.hail.utils._
-import org.broadinstitute.hail.variant.{Variant, VariantDataset}
+import org.broadinstitute.hail.variant.{Genotype, GenotypeStream, Variant, VariantDataset}
 
 object ToStandardizedIndexedRowMatrix {
   def apply(vds: VariantDataset): (Array[Variant], IndexedRowMatrix) = {
@@ -70,5 +71,20 @@ object ToIndexedRowMatrix {
 
     (variants, new IndexedRowMatrix(matrix.cache(), nVariants, nSamples))
   }
+}
 
+// FIXME: reconcile with above
+object ToGTColumn {
+  def apply(gs: Iterable[Genotype]): Option[DenseMatrix[Double]] = {
+    val (nCalled, gtSum, allHet) = gs.flatMap(_.nNonRefAlleles).foldLeft((0, 0, true))((acc, gt) => (acc._1 + 1, acc._2 + gt, acc._3 && (gt == 1) ))
+
+    // allHomRef || allHet || allHomVar || allNoCall
+    if (gtSum == 0 || allHet || gtSum == 2 * nCalled || nCalled == 0 )
+      None
+    else {
+      val gtMean = gtSum.toDouble / nCalled
+      val gtArray = gs.map(_.gt.map(_.toDouble).getOrElse(gtMean)).toArray
+      Some(new DenseMatrix(gtArray.length, 1, gtArray))
+    }
+  }
 }
