@@ -1,7 +1,6 @@
 package org.broadinstitute.hail.stats
 
 import breeze.linalg._
-import org.apache.commons.math3.special.Gamma
 import org.apache.spark.mllib.linalg.{Matrices, DenseMatrix => SDenseMatrix}
 import org.apache.spark.mllib.linalg.SingularValueDecomposition
 import org.apache.spark.mllib.linalg.distributed.IndexedRowMatrix
@@ -9,7 +8,6 @@ import org.apache.spark.rdd.RDD
 import org.broadinstitute.hail.methods.{ToIndexedRowMatrix, ToStandardizedIndexedRowMatrix}
 import org.broadinstitute.hail.variant.{Variant, VariantDataset}
 import org.broadinstitute.hail.utils._
-
 
 object LMM {
   def applyVds(vds: VariantDataset,
@@ -73,11 +71,12 @@ object DiagLMM {
     val n = y.length
     val D = S + delta
     val dy = y :/ D
+    val dC = C(::, *) :/ D
     val ydy = y dot dy
-    val xdy = C.t * dy
-    val xdx = C.t * (C(::, *) :/ D)
-    val b = xdx \ xdy
-    val s2 = (ydy - (xdy dot b)) / (if (useREML) n - C.cols else n)
+    val Cdy = C.t * dy
+    val CdC = C.t * dC
+    val b = CdC \ Cdy
+    val s2 = (ydy - (Cdy dot b)) / (if (useREML) n - C.cols else n)
 
     DiagLMM(C, y, dy, ydy, b, s2, math.log(s2), delta, D.map(1 / _), useREML)
   }
@@ -111,9 +110,6 @@ object DiagLMM {
 
     grid.map(delta => (delta, negLogLkhd(delta, useREML)))
   }
-
-  // remove once logreg is in
-  def chiSquaredTail(df: Double, x: Double) = Gamma.regularizedGammaQ(df / 2, x / 2)
 }
 
 case class DiagLMM(
@@ -140,7 +136,7 @@ case class DiagLMM(
     val b = xdx \ xdy
     val s2 = (ydy - (xdy dot b)) / (if (useREML) n - C.cols else n)
     val chi2 = n * (logNullS2 - math.log(s2))
-    val p = DiagLMM.chiSquaredTail(1, chi2)
+    val p = chiSquaredTail(1, chi2)
 
     LMMStat(b, s2, chi2, p)
   }
@@ -270,8 +266,6 @@ object DiagLMMLowRank {
     grid.map(delta => (delta, negLogLkhd(delta, useREML)))
   }
 
-  // remove once logreg is in
-  def chiSquaredTail(df: Double, x: Double) = Gamma.regularizedGammaQ(df / 2, x / 2)
 }
 
 case class DiagLMMLowRank(
@@ -321,7 +315,7 @@ case class DiagLMMLowRank(
     val s2 = (r1 + r2) / (if (useREML) n - c else n)
 
     val chi2 = n * (logNullS2 - math.log(s2))
-    val p = DiagLMM.chiSquaredTail(1, chi2)
+    val p = chiSquaredTail(1, chi2)
 
     LMMStat(b, s2, chi2, p)
   }
