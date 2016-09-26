@@ -65,8 +65,8 @@ class LinearMixedModelSuite extends SparkSuite {
     val W = G(::, 0 to 1)
 
     for (i <- 0 until W.cols) {
-      W(::,i) -= mean(W(::,i))
-      W(::,i) /= norm(W(::,i))
+      W(::, i) -= mean(W(::, i))
+      W(::, i) /= norm(W(::, i))
     }
 
     val svdW = svd(W)
@@ -76,7 +76,7 @@ class LinearMixedModelSuite extends SparkSuite {
     val y = Ut * y0
     val C = Ut * C0
 
-//  val delta = findDelta(y, C)
+    //  val delta = findDelta(y, C)
     val delta = 1d
 
     val model = DiagLMM(C, y, S, Some(delta))
@@ -97,15 +97,15 @@ class LinearMixedModelSuite extends SparkSuite {
     val n = 100 // even
     val m = 10
     val c = 5
-    val b = DenseVector(2.0, 1.0, 0.0, -1.0, -2.0)  // length is c
+    val b = DenseVector(2.0, 1.0, 0.0, -1.0, -2.0) // length is c
 
     val C0 = DenseMatrix.horzcat(DenseMatrix.ones[Double](n, 1), DenseMatrix.fill[Double](n, c - 1)(rand.gaussian.draw()))
 
     val W = DenseMatrix.vertcat(DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()), DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()) + .5)
 
     for (i <- 0 until W.cols) {
-      W(::,i) -= mean(W(::,i))
-      W(::,i) /= norm(W(::,i))
+      W(::, i) -= mean(W(::, i))
+      W(::, i) /= norm(W(::, i))
     }
 
     val K = W * W.t
@@ -144,7 +144,7 @@ class LinearMixedModelSuite extends SparkSuite {
     println(model.nullS2)
     println()
     println("b")
-    (0 until c).foreach(i => println(s"$i: ${b(i)}, ${model.nullB(i)}"))
+    (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ model.nullB(i) }"))
 
     val modelR = DiagLMM(C, y, S, optDelta = None, useREML = true)
     //val model = DiagLMM(C, y, S)
@@ -159,7 +159,7 @@ class LinearMixedModelSuite extends SparkSuite {
     println(modelR.nullS2)
     println()
     println("b")
-    (0 until c).foreach(i => println(s"$i: ${b(i)}, ${modelR.nullB(i)}"))
+    (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ modelR.nullB(i) }"))
   }
 
   @Test def genAndFitLMMTestDist() {
@@ -173,15 +173,15 @@ class LinearMixedModelSuite extends SparkSuite {
     val k = 10
     val c = 5
 
-    val b = DenseVector(2.0, 1.0, 0.0, -1.0, -2.0)  // length is c
+    val b = DenseVector(2.0, 1.0, 0.0, -1.0, -2.0) // length is c
 
     val C0 = DenseMatrix.horzcat(DenseMatrix.ones[Double](n, 1), DenseMatrix.fill[Double](n, c - 1)(rand.gaussian.draw()))
 
     val W = DenseMatrix.vertcat(DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()), DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()) + .5)
 
     for (i <- 0 until W.cols) {
-      W(::,i) -= mean(W(::,i))
-      W(::,i) /= norm(W(::,i))
+      W(::, i) -= mean(W(::, i))
+      W(::, i) /= norm(W(::, i))
     }
 
     val K = W * W.t
@@ -214,7 +214,7 @@ class LinearMixedModelSuite extends SparkSuite {
 
     println()
     println("b")
-    (0 until c).foreach(i => println(s"$i: ${b(i)}, ${model.nullB(i)}"))
+    (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ model.nullB(i) }"))
   }
 
   @Test def genAndFitLMMTestDistLowRank() {
@@ -223,20 +223,20 @@ class LinearMixedModelSuite extends SparkSuite {
 
     val n = 100 // even
     val m = 10
-//    val variantIdx = 0 until m
-//    val variants = (0 until m).map(i => Variant("1", i, "A", "C")).toArray
+    //    val variantIdx = 0 until m
+    //    val variants = (0 until m).map(i => Variant("1", i, "A", "C")).toArray
     val k = 10
     val c = 5
 
-    val b = DenseVector(2.0, 1.0, 0.0, -1.0, -2.0)  // length is c
+    val b = DenseVector(2.0, 1.0, 0.0, -1.0, -2.0) // length is c
 
     val C0 = DenseMatrix.horzcat(DenseMatrix.ones[Double](n, 1), DenseMatrix.fill[Double](n, c - 1)(rand.gaussian.draw()))
 
     val W = DenseMatrix.vertcat(DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()), DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()) + .5)
 
     for (i <- 0 until W.cols) {
-      W(::,i) -= mean(W(::,i))
-      W(::,i) /= norm(W(::,i))
+      W(::, i) -= mean(W(::, i))
+      W(::, i) /= norm(W(::, i))
     }
 
     val K = W * W.t
@@ -268,7 +268,7 @@ class LinearMixedModelSuite extends SparkSuite {
     println(model.nullS2)
     println()
     println("b")
-    (0 until c).foreach(i => println(s"$i: ${b(i)}, ${model.nullB(i)}"))
+    (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ model.nullB(i) }"))
 
     val lmmResultLowRankR = LMMLowRank(Wt, variants, genotypes, C0, y0, k, None, useREML = true)
     val modelR = lmmResultLowRankR.diagLMMLowRank
@@ -284,7 +284,7 @@ class LinearMixedModelSuite extends SparkSuite {
 
     println()
     println("b")
-    (0 until c).foreach(i => println(s"$i: ${b(i)}, ${modelR.nullB(i)}"))
+    (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ modelR.nullB(i) }"))
 
   }
 
@@ -326,9 +326,9 @@ class LinearMixedModelSuite extends SparkSuite {
 
     println()
     println("S")
-    (0 until n).foreach(i => println(s"$i: ${S(i)}"))
+    (0 until n).foreach(i => println(s"$i: ${ S(i) }"))
     println()
-    println(s"U is (${U.rows}, ${U.cols})")
+    println(s"U is (${ U.rows }, ${ U.cols })")
     println(U)
 
     // 0 means rotated by U.t
@@ -403,7 +403,7 @@ class LinearMixedModelSuite extends SparkSuite {
 
     println()
     println("b0")
-    println(s"0: ${b(0)}, $beta2")
+    println(s"0: ${ b(0) }, $beta2")
 
 
 
@@ -454,7 +454,7 @@ class LinearMixedModelSuite extends SparkSuite {
 
     val C4pC4 = DenseMatrix.zeros[Double](c, c)
     for (i <- 0 until n) {
-      C4pC4 += C4(i,::).t * C4(i,::)
+      C4pC4 += C4(i, ::).t * C4(i, ::)
     }
 
     println()
@@ -464,7 +464,7 @@ class LinearMixedModelSuite extends SparkSuite {
 
     val C4py4 = DenseVector.zeros[Double](c)
     for (i <- 0 until n) {
-      C4py4 += C4(i,::).t * y4(i)
+      C4py4 += C4(i, ::).t * y4(i)
     }
 
     println() // all equal
@@ -525,6 +525,26 @@ class LinearMixedModelSuite extends SparkSuite {
 
     println()
     println("b")
-    (0 until c).foreach(i => println(s"$i: ${b(i)}, ${model.nullB(i)}"))
+    (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ model.nullB(i) }"))
+  }
+
+  @Test def svdSpeedTest() {
+    val seed = 0
+    implicit val rand: RandBasis = new RandBasis(new ThreadLocalRandomGenerator(new MersenneTwister(seed)))
+
+    def computeSVD0(n: Int, m: Int) {
+      val W = DenseMatrix.fill[Double](n, m)(rand.gaussian.draw())
+      svd(W).singularValues(0)
+    }
+
+    println(1000)
+    printTime(computeSVD0(1000, 1000))
+    println(2000)
+    printTime(computeSVD0(2000, 2000))
+    println(4000)
+    printTime(computeSVD0(4000, 4000))
+    println(8000)
+    printTime(computeSVD0(8000, 8000))
+
   }
 }
