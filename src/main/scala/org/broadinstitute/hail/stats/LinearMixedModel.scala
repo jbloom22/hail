@@ -42,12 +42,12 @@ object LMM {
     val U = svd.V // W = svd.V * svd.s * svd.U.t
     val UB = new DenseMatrix[Double](svd.V.numRows, svd.V.numCols, svd.V.toArray)
 
-    println(UB.rows, UB.cols)
+    // println(UB.rows, UB.cols)
 
     val s = toBDenseVector(svd.s.toDense)
     val SB =  s :* s // K = U * (svd.s * svd.s) * V.t
 
-    SB.foreach(println)
+    // SB.foreach(println)
 
     val diagLMM = DiagLMM(UB.t * C, UB.t * y, SB, optDelta, useREML)
 
