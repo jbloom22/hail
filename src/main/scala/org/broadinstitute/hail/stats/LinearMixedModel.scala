@@ -15,14 +15,13 @@ object LMM {
     filtGRM: Variant => Boolean,
     C: DenseMatrix[Double],
     y: DenseVector[Double],
-    k: Int,
     optDelta: Option[Double] = None,
     useREML: Boolean = true): LMMResult = {
 
     val Wt = ToStandardizedIndexedRowMatrix(vds.filterVariants((v, va, gs) => filtGRM(v)))._2 // W is samples by variants, Wt is variants by samples
     val (variants, genotypes) = ToIndexedRowMatrix(vds.filterVariants((v, va, gs) => filtTest(v)))
 
-    LMM(Wt, variants, genotypes, C, y, k, optDelta)
+    LMM(Wt, variants, genotypes, C, y, optDelta)
   }
 
   def apply(Wt: IndexedRowMatrix,
@@ -30,33 +29,48 @@ object LMM {
     genotypes: IndexedRowMatrix,
     C: DenseMatrix[Double],
     y: DenseVector[Double],
-    k: Int,
     optDelta: Option[Double] = None,
     useREML: Boolean = true): LMMResult = {
 
-    require(k <= Wt.numRows())
-    require(k <= Wt.numCols())
+    assert(Wt.numCols == y.length)
 
-    val svd: SingularValueDecomposition[IndexedRowMatrix, org.apache.spark.mllib.linalg.Matrix] = Wt.computeSVD(k)
+    val n = y.length
 
-    val U = svd.V // W = svd.V * svd.s * svd.U.t
-    val UB = new DenseMatrix[Double](svd.V.numRows, svd.V.numCols, svd.V.toArray)
+    println(formatTime(System.nanoTime()))
+    println("building K")
 
-    // println(UB.rows, UB.cols)
+//    val blockWt = Wt.toBlockMatrix().cache()
+//    val Kspark = blockWt.transpose.multiply(blockWt).toLocalMatrix().asInstanceOf[SDenseMatrix]
+//    assert(Kspark.numCols == n && Kspark.numRows == n)
 
-    val s = toBDenseVector(svd.s.toDense)
-    val SB =  s :* s // K = U * (svd.s * svd.s) * V.t
+    val Kspark = Wt.computeGramianMatrix().asInstanceOf[SDenseMatrix]
 
-    // SB.foreach(println)
+    val K = new DenseMatrix[Double](n, n, Kspark.values)
 
-    val diagLMM = DiagLMM(UB.t * C, UB.t * y, SB, optDelta, useREML)
+    println(K(0,0))
+
+    println(formatTime(System.nanoTime()))
+    println("computing svd of K")
+
+    val svdK = svd(K)
+    val U = svdK.U
+    val S = svdK.S
+
+    println(S(0))
+
+    println(formatTime(System.nanoTime()))
+    println("building DiagLMM")
+
+    val diagLMM = DiagLMM(U.t * C, U.t * y, S, optDelta, useREML)
 
     val diagLMMBc = genotypes.rows.sparkContext.broadcast(diagLMM)
 
-    // FIXME: variant names are already local, we shouldn't be gathering them all, right?!
+    val Uspark = new SDenseMatrix(n, n, U.data)
 
-    val lmmResult = genotypes.multiply(U).rows.map(r =>
+    val lmmResult = genotypes.multiply(Uspark).rows.map(r =>
       (variants(r.index.toInt), diagLMMBc.value.likelihoodRatioTest(toBDenseVector(r.vector.toDense))))
+
+    println(formatTime(System.nanoTime()))
 
     LMMResult(diagLMM, lmmResult)
   }
@@ -130,11 +144,12 @@ case class DiagLMM(
     val n = x.length
     val X = DenseMatrix.horzcat(x.asDenseMatrix.t, C)
 
-    val xdx = X.t * (X(::, *) :* invD)
-    val xdy = X.t * dy
+    val dX = X(::, *) :* invD
+    val XdX = X.t * dX // can precompute CdC
+    val Xdy = X.t * dy
 
-    val b = xdx \ xdy
-    val s2 = (ydy - (xdy dot b)) / (if (useREML) n - C.cols else n)
+    val b = XdX \ Xdy
+    val s2 = (ydy - (Xdy dot b)) / (if (useREML) n - C.cols else n)
     val chi2 = n * (logNullS2 - math.log(s2))
     val p = chiSquaredTail(1, chi2)
 
@@ -291,14 +306,14 @@ case class DiagLMMLowRank(
 
     val X = DenseMatrix.horzcat(x.asDenseMatrix.t, C)
 
-    val XdX = X.t * (X(::, *) :* invD)
+    val XdX = X.t * (X(::, *) :* invD) // can precompute CdC
     val Xdy = X.t * dy
 
     val xpx = x dot x
     val Cpx = C.t * x
     val Xpy = DenseVector.vertcat(DenseVector(xpy), Cpy)
 
-    val XpX = DenseMatrix.zeros[Double](c + 1, c + 1)  // ugly
+    val XpX = DenseMatrix.zeros[Double](c + 1, c + 1)  // ugly, and while loop is faster
     XpX(0, 0) = xpx
     for (i <- 1 to c) {
       XpX(0, i) = Cpx(i - 1)

@@ -29,14 +29,7 @@ class LinearMixedModelSuite extends SparkSuite {
 
     val model = DiagLMM(C, y, S, Some(delta))
 
-    val gts = DenseVector(0d, 1d, 2d, 0d, 0d, 1d)
-
-    val stats = model.likelihoodRatioTest(gts)
-
-    println(stats.b(0))
-    println(stats.b(1))
-    println(stats.b(2))
-    println(stats.s2)
+    println(model)
   }
 
   @Test def lmmTest() {
@@ -69,6 +62,7 @@ class LinearMixedModelSuite extends SparkSuite {
       W(::, i) /= norm(W(::, i))
     }
 
+    val K = W * W.t
     val svdW = svd(W)
     val Ut = svdW.U.t
     val S = (svdW.S :* svdW.S).padTo(n, 0).toDenseVector
@@ -77,25 +71,91 @@ class LinearMixedModelSuite extends SparkSuite {
     val C = Ut * C0
 
     //  val delta = findDelta(y, C)
-    val delta = 1d
+    val delta = 2d
 
     val model = DiagLMM(C, y, S, Some(delta))
 
     val results: Map[Int, LMMStat] = (0 until m).map { v =>
-      val gts = G(::, v to v).toDenseVector
-      val stats = model.likelihoodRatioTest(gts)
+      val gts = G(::, v)
+      val stats = model.likelihoodRatioTest(Ut * gts)
       (v, stats)
     }.toMap
 
     results.foreach(println)
+
+//    val sqrtD = sqrt(S + delta)
+//    val Cs = C(::, *) :/ sqrtD
+//    val ys = y :/ sqrtD
+//
+//    val Ckeep = Cs(::, 0 to 0)
+//    val Cproj = Cs(::, 1 to 2)
+//
+//    val Q = qr.reduced.justQ(Cproj)
+//
+//    val modelProj = DiagLMM(Ckeep - Q * Q.t * Ckeep, ys - Q * Q.t * ys, DenseVector.zeros[Double](n), Some(1))
+//
+//    val resultsProj: Map[Int, LMMStat] = (0 until m).map { v =>
+//      val gts = G(::, v)
+//      val gtss = gts :/ sqrtD
+//      val stats = modelProj.likelihoodRatioTest(gtss - Q * Q.t * gtss)
+//      (v, stats)
+//    }.toMap
+//
+//    println()
+//    resultsProj.foreach(println)
+
+//    println(Utd * C0)
+//    println(Cs)
+//
+//    println(Utd * y0)
+//    println(ys)
+
+    val D = S + delta
+    val sqrtD = sqrt(D)
+    val UtC0 = Ut * C0
+    val dUtC0 = UtC0(::,*) :/ sqrtD
+    val Qt = qr.reduced.justQ(dUtC0).t // can pull the Ut out?
+    val Qtd = Qt(*,::) :/ sqrtD
+    val QtdUt = Qtd * Ut
+    val Uty0 = Ut * y0
+    val dUty0 = Uty0 :/ sqrtD
+    val QtdUty0 = QtdUt * y0
+    val yPy = (dUty0 dot dUty0) - (QtdUty0 dot QtdUty0)
+
+    println()
+    println(dUty0 dot dUty0)
+    println(y0.t * inv(K + delta * DenseMatrix.eye[Double](n)) * y0)
+    println(y0 dot (y0 :/ D)) // NOT THE SAME
+
+    val resultsTrick: Map[Int, LMMStat] = (0 until m).map { v =>
+      val x0 = G(::, v)
+      val Utx0 = Ut * x0
+      val dUtx0 = Utx0 :/ sqrtD
+      val QtdUtx0 = QtdUt * x0
+
+      val xPx = (dUtx0 dot dUtx0) - (QtdUtx0 dot QtdUtx0)
+      val xPy = (dUtx0 dot dUty0) - (QtdUtx0 dot QtdUty0)
+
+      val b = xPy / xPx
+      val s2 = (yPy - xPy * b) / (n - C0.cols)
+      val chi2 = n * (model.logNullS2 - math.log(s2))
+      val p = chiSquaredTail(1, chi2)
+
+      (v, LMMStat(DenseVector(b), s2, chi2, p))
+    }.toMap
+
+    println()
+    resultsTrick.foreach(println)
+
+    // what happens if we project out right away?
   }
 
   @Test def genAndFitLMMTest() {
     val seed = 1
     implicit val rand: RandBasis = new RandBasis(new ThreadLocalRandomGenerator(new MersenneTwister(seed)))
 
-    val n = 100 // even
-    val m = 10
+    val n = 1000 // even
+    val m = 1000
     val c = 5
     val b = DenseVector(2.0, 1.0, 0.0, -1.0, -2.0) // length is c
 
@@ -108,12 +168,25 @@ class LinearMixedModelSuite extends SparkSuite {
       W(::, i) /= norm(W(::, i))
     }
 
+    println(formatTime(System.nanoTime()))
+    println("computing svd of K")
+
     val K = W * W.t
 
+    println(K(0,0))
+
+    println(formatTime(System.nanoTime()))
+    println("computing svd of W")
     val svdW = svd(W)
 
+    println(svdW.S(0))
+
+    println(formatTime(System.nanoTime()))
+    println("done")
+
+
     val sigmaGSq = 1d
-    val delta = 1d
+    val delta = 2d
     val V = sigmaGSq * (K + delta * DenseMatrix.eye[Double](n))
 
     val distY0 = MultivariateGaussian(C0 * b, V)(rand)
@@ -166,11 +239,10 @@ class LinearMixedModelSuite extends SparkSuite {
     val seed = 1
     implicit val rand: RandBasis = new RandBasis(new ThreadLocalRandomGenerator(new MersenneTwister(seed)))
 
-    val n = 100 // even
-    val m = 10
-    val variantIdx = 0 until m
-    val variants = (0 until m).map(i => Variant("1", i, "A", "C")).toArray
-    val k = 10
+    val n = 1000 // even
+    val m = 2000
+    //val variantIdx = 0 until m
+    //val variants = (0 until m).map(i => Variant("1", i, "A", "C")).toArray
     val c = 5
 
     val b = DenseVector(2.0, 1.0, 0.0, -1.0, -2.0) // length is c
@@ -187,7 +259,7 @@ class LinearMixedModelSuite extends SparkSuite {
     val K = W * W.t
 
     val sigmaGSq = 1d
-    val delta = 1d
+    val delta = 2d
     val V = sigmaGSq * (K + delta * DenseMatrix.eye[Double](n))
 
     val distY0 = MultivariateGaussian(C0 * b, V)(rand)
@@ -199,33 +271,48 @@ class LinearMixedModelSuite extends SparkSuite {
     val Wt = new IndexedRowMatrix(sc.makeRDD(Wcols), m, n)
 
     val genotypes = new IndexedRowMatrix(sc.makeRDD(IndexedSeq[IndexedRow]()), 0, n)
+    val variants = Array[Variant]()
 
-    val lmmResult = LMM(Wt, variants, genotypes, C0, y0, k, None)
-
+    val lmmResult = LMM(Wt, variants, genotypes, C0, y0, None, useREML = false)
     val model = lmmResult.diagLMM
 
-    println("delta:")
+    println()
+    println("ML delta:")
     println(delta)
     println(model.delta)
     println()
     println("s2:")
     println(sigmaGSq)
     println(model.nullS2)
-
     println()
     println("b")
     (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ model.nullB(i) }"))
+
+    val lmmResultR = LMM(Wt, variants, genotypes, C0, y0, None, useREML = true)
+    val modelR = lmmResultR.diagLMM
+
+    println()
+    println("REML delta:")
+    println(delta)
+    println(modelR.delta)
+    println()
+    println("s2:")
+    println(sigmaGSq)
+    println(modelR.nullS2)
+    println()
+    println("b")
+    (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ modelR.nullB(i) }"))
   }
 
   @Test def genAndFitLMMTestDistLowRank() {
     val seed = 1
     implicit val rand: RandBasis = new RandBasis(new ThreadLocalRandomGenerator(new MersenneTwister(seed)))
 
-    val n = 100 // even
-    val m = 10
+    val n = 1000 // even
+    val m = 1000
     //    val variantIdx = 0 until m
     //    val variants = (0 until m).map(i => Variant("1", i, "A", "C")).toArray
-    val k = 10
+    val k = 1000
     val c = 5
 
     val b = DenseVector(2.0, 1.0, 0.0, -1.0, -2.0) // length is c
@@ -242,7 +329,7 @@ class LinearMixedModelSuite extends SparkSuite {
     val K = W * W.t
 
     val sigmaGSq = 1d
-    val delta = 1d
+    val delta = 2d
     val V = sigmaGSq * (K + delta * DenseMatrix.eye[Double](n))
 
     val distY0 = MultivariateGaussian(C0 * b, V)(rand)
