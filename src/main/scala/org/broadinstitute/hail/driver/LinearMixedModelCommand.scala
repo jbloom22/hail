@@ -1,13 +1,13 @@
 package org.broadinstitute.hail.driver
 
-import breeze.linalg.{DenseMatrix, DenseVector}
+import breeze.linalg._
 import org.broadinstitute.hail.annotations.Annotation
 import org.broadinstitute.hail.expr._
-import org.broadinstitute.hail.methods.{LinRegStats, LinearRegression}
+import org.broadinstitute.hail.stats.{LMM, LMMStat}
 import org.broadinstitute.hail.utils._
 import org.kohsuke.args4j.{Option => Args4jOption}
 
-object LMMCommand extends Command {
+object LinearMixedModelCommand extends Command {
 
   def name = "lmmreg"
 
@@ -20,11 +20,17 @@ object LMMCommand extends Command {
     @Args4jOption(required = false, name = "-c", aliases = Array("--covariates"), usage = "Covariate sample annotations, comma-separated")
     var covSA: String = ""
 
-    @Args4jOption(required = true, name = "-g", aliases = Array("--grmfilter"), usage = "variant filter for GRM")
-    var grmFiltSA: String = ""
+    @Args4jOption(required = true, name = "-g", aliases = Array("--grmfilter"), usage = "Variant filter for GRM")
+    var grmFiltSA: String = _
 
-    @Args4jOption(required = true, name = "-a", aliases = Array("--assocfilter"), usage = "variant filter for association")
-    var gwasFiltSA: String = ""
+    @Args4jOption(required = true, name = "-a", aliases = Array("--assocfilter"), usage = "Variant filter for association")
+    var assocFiltSA: String = _
+
+    @Args4jOption(required = false, name = "-reml", aliases = Array("--usereml"), usage = "Use reml to fit delta")
+    var useREML: Boolean = true
+
+    @Args4jOption(required = false, name = "-d", aliases = Array("--delta"), usage = "Fix a value for delta")
+    var delta: Double = _
 
     @Args4jOption(required = false, name = "-r", aliases = Array("--root"), usage = "Variant annotation root, a period-delimited path starting with `va'")
     var root: String = "va.lmmreg"
@@ -95,13 +101,30 @@ object LMMCommand extends Command {
     val completeSampleSet = completeSamples.toSet
     val vdsForCompleteSamples = vds.filterSamples((s, sa) => completeSampleSet(s))
 
-    val linreg = LinearRegression(vdsForCompleteSamples, y, cov)
+    val n = y.size
+    val d = n - k - 2
 
-    val (newVAS, inserter) = vdsForCompleteSamples.insertVA(LinRegStats.`type`, pathVA)
+    if (d < 1)
+      fatal(s"$n samples and $k ${plural(k, "covariate")} with intercept implies $d degrees of freedom.")
+
+    info(s"Running lmmreg on $n samples with $k sample ${plural(k, "covariate")}...")
+
+    val C: DenseMatrix[Double] = cov match {
+      case Some(dm) => DenseMatrix.horzcat(dm, DenseMatrix.ones[Double](n, 1))
+      case None => DenseMatrix.ones[Double](n, 1)
+    }
+
+    val vdsFilt = FilterVariantsExpr.filterVariantsExpr(vds, options.assocFiltSA, keep = true)
+    val vdsAssoc = FilterVariantsExpr.filterVariantsExpr(vdsForCompleteSamples, options.assocFiltSA, keep = true)
+    val vdsKernel = FilterVariantsExpr.filterVariantsExpr(vdsForCompleteSamples, options.assocFiltSA, keep = true)
+
+    val lmmreg = LMM.applyVds(vdsAssoc, vdsKernel, C, y, Option(options.delta), options.useREML)
+
+    val (newVAS, inserter) = vdsForCompleteSamples.insertVA(LMMStat.`type`, pathVA)
 
     state.copy(
       vds = vds.copy(
-        rdd = vds.rdd.zipPartitions(linreg.rdd, preservesPartitioning = true) { case (it, jt) =>
+        rdd = vdsFilt.rdd.zipPartitions(lmmreg.rdd, preservesPartitioning = true) { case (it, jt) =>
           it.zip(jt).map { case ((v, (va, gs)), (v2, comb)) =>
             assert(v == v2)
             (v, (inserter(va, comb.map(_.toAnnotation)), gs))

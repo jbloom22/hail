@@ -81,6 +81,7 @@ object ToplevelCommands {
   register(ImputeSex)
   register(IndexBGEN)
   register(LinearRegressionCommand)
+  register(LinearMixedModelCommand)
   register(LogisticRegressionCommand)
   register(MendelErrorsCommand)
   register(SplitMulti)
