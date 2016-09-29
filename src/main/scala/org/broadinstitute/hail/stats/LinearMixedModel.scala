@@ -5,21 +5,22 @@ import org.apache.spark.mllib.linalg.{Matrices, DenseMatrix => SDenseMatrix}
 import org.apache.spark.mllib.linalg.SingularValueDecomposition
 import org.apache.spark.mllib.linalg.distributed.IndexedRowMatrix
 import org.apache.spark.rdd.RDD
+import org.broadinstitute.hail.annotations._
+import org.broadinstitute.hail.expr.{TDouble, TInt, TStruct, Type}
 import org.broadinstitute.hail.methods.{ToIndexedRowMatrix, ToStandardizedIndexedRowMatrix}
-import org.broadinstitute.hail.variant.{Variant, VariantDataset}
+import org.broadinstitute.hail.variant.{Genotype, Variant, VariantDataset}
 import org.broadinstitute.hail.utils._
 
 object LMM {
   def applyVds(vds: VariantDataset,
-    filtTest: Variant => Boolean,
-    filtGRM: Variant => Boolean,
+    vdsKernel: VariantDataset,
     C: DenseMatrix[Double],
     y: DenseVector[Double],
     optDelta: Option[Double] = None,
     useREML: Boolean = true): LMMResult = {
 
-    val Wt = ToStandardizedIndexedRowMatrix(vds.filterVariants((v, va, gs) => filtGRM(v)))._2 // W is samples by variants, Wt is variants by samples
-    val (variants, genotypes) = ToIndexedRowMatrix(vds.filterVariants((v, va, gs) => filtTest(v)))
+    val Wt = ToStandardizedIndexedRowMatrix(vdsKernel)._2 // W is samples by variants, Wt is variants by samples
+    val (variants, genotypes) = ToIndexedRowMatrix(vds)
 
     LMM(Wt, variants, genotypes, C, y, optDelta)
   }
@@ -68,7 +69,7 @@ object LMM {
     val Uspark = new SDenseMatrix(n, n, U.data)
 
     val lmmResult = genotypes.multiply(Uspark).rows.map(r =>
-      (variants(r.index.toInt), diagLMMBc.value.likelihoodRatioTest(toBDenseVector(r.vector.toDense))))
+      (variants(r.index.toInt), Option(diagLMMBc.value.likelihoodRatioTest(toBDenseVector(r.vector.toDense)))))
 
     println(formatTime(System.nanoTime()))
 
@@ -157,23 +158,33 @@ case class DiagLMM(
   }
 }
 
-case class LMMStat(b: DenseVector[Double], s2: Double, chi2: Double, p: Double)
+object LMMStat {
+  def `type`: Type = TStruct(
+    ("beta", TDouble),
+    ("s2", TDouble),
+    ("chi2", TDouble),
+    ("pval", TDouble))
+}
 
-case class LMMResult(diagLMM: DiagLMM, stats: RDD[(Variant, LMMStat)])
+case class LMMStat(b: DenseVector[Double], s2: Double, chi2: Double, p: Double) {
+  def toAnnotation: Annotation = Annotation(b(0), s2, chi2, p)
+}
+
+case class LMMResult(diagLMM: DiagLMM, rdd: RDD[(Variant, Option[LMMStat])])
 
 
 object LMMLowRank {
   def applyVds(vds: VariantDataset,
-    filtTest: Variant => Boolean,
-    filtGRM: Variant => Boolean,
+    filtAssoc: (Variant, Annotation, Iterable[Genotype]) => Boolean,
+    filtGRM: (Variant, Annotation, Iterable[Genotype]) => Boolean,
     C: DenseMatrix[Double],
     y: DenseVector[Double],
     k: Int,
     optDelta: Option[Double] = None,
     useREML: Boolean = true): LMMResultLowRank = {
 
-    val Wt = ToStandardizedIndexedRowMatrix(vds.filterVariants((v, va, gs) => filtGRM(v)))._2 // W is samples by variants, Wt is variants by samples
-    val (variants, genotypes) = ToIndexedRowMatrix(vds.filterVariants((v, va, gs) => filtTest(v)))
+    val Wt = ToStandardizedIndexedRowMatrix(vds.filterVariants(filtGRM))._2 // W is samples by variants, Wt is variants by samples
+    val (variants, genotypes) = ToIndexedRowMatrix(vds.filterVariants(filtAssoc))
 
     LMMLowRank(Wt, variants, genotypes, C, y, k, optDelta, useREML)
   }

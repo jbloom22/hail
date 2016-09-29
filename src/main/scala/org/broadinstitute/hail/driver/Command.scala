@@ -90,6 +90,7 @@ object ToplevelCommands {
   register(IndexBGEN)
   register(Join)
   register(LinearRegressionCommand)
+  register(LinearMixedModelCommand)
   register(LogisticRegressionCommand)
   register(MendelErrorsCommand)
   register(SplitMulti)
