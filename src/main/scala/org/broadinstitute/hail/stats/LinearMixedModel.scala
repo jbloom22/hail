@@ -69,7 +69,7 @@ object LMM {
     val Uspark = new SDenseMatrix(n, n, U.data)
 
     val lmmResult = genotypes.multiply(Uspark).rows.map(r =>
-      (variants(r.index.toInt), Option(diagLMMBc.value.likelihoodRatioTest(toBDenseVector(r.vector.toDense)))))
+      (variants(r.index.toInt), diagLMMBc.value.likelihoodRatioTest(toBDenseVector(r.vector.toDense))))
 
     println(formatTime(System.nanoTime()))
 
@@ -170,7 +170,7 @@ case class LMMStat(b: DenseVector[Double], s2: Double, chi2: Double, p: Double) 
   def toAnnotation: Annotation = Annotation(b(0), s2, chi2, p)
 }
 
-case class LMMResult(diagLMM: DiagLMM, rdd: RDD[(Variant, Option[LMMStat])])
+case class LMMResult(diagLMM: DiagLMM, rdd: RDD[(Variant, LMMStat)])
 
 
 object LMMLowRank {

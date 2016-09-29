@@ -20,8 +20,8 @@ object LinearMixedModelCommand extends Command {
     @Args4jOption(required = false, name = "-c", aliases = Array("--covariates"), usage = "Covariate sample annotations, comma-separated")
     var covSA: String = ""
 
-    @Args4jOption(required = true, name = "-g", aliases = Array("--grmfilter"), usage = "Variant filter for GRM")
-    var grmFiltSA: String = _
+    @Args4jOption(required = true, name = "-g", aliases = Array("--kernelfilter"), usage = "Variant filter for kernel")
+    var kernelFiltSA: String = _
 
     @Args4jOption(required = true, name = "-a", aliases = Array("--assocfilter"), usage = "Variant filter for association")
     var assocFiltSA: String = _
@@ -114,9 +114,8 @@ object LinearMixedModelCommand extends Command {
       case None => DenseMatrix.ones[Double](n, 1)
     }
 
-    val vdsFilt = FilterVariantsExpr.filterVariantsExpr(vds, options.assocFiltSA, keep = true)
-    val vdsAssoc = FilterVariantsExpr.filterVariantsExpr(vdsForCompleteSamples, options.assocFiltSA, keep = true)
-    val vdsKernel = FilterVariantsExpr.filterVariantsExpr(vdsForCompleteSamples, options.assocFiltSA, keep = true)
+    val vdsAssoc = vdsForCompleteSamples.filterVariantsExpr(options.assocFiltSA, keep = true)
+    val vdsKernel = vdsForCompleteSamples.filterVariantsExpr(options.kernelFiltSA, keep = true)
 
     val lmmreg = LMM.applyVds(vdsAssoc, vdsKernel, C, y, Option(options.delta), options.useREML)
 
@@ -124,12 +123,9 @@ object LinearMixedModelCommand extends Command {
 
     state.copy(
       vds = vds.copy(
-        rdd = vdsFilt.rdd.zipPartitions(lmmreg.rdd, preservesPartitioning = true) { case (it, jt) =>
-          it.zip(jt).map { case ((v, (va, gs)), (v2, comb)) =>
-            assert(v == v2)
-            (v, (inserter(va, comb.map(_.toAnnotation)), gs))
-          }
-        }.asOrderedRDD,
+        rdd = vds.rdd.orderedLeftJoinDistinct(lmmreg.rdd.toOrderedRDD)
+          .mapValues{ case ((va, gs), optlmmstat) => (inserter(va, optlmmstat.map(_.toAnnotation)), gs) }
+          .asOrderedRDD,
         vaSignature = newVAS
       )
     )
