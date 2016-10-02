@@ -20,17 +20,17 @@ object LinearMixedModelCommand extends Command {
     @Args4jOption(required = false, name = "-c", aliases = Array("--covariates"), usage = "Covariate sample annotations, comma-separated")
     var covSA: String = ""
 
-    @Args4jOption(required = true, name = "-g", aliases = Array("--kernelfilter"), usage = "Variant filter for kernel")
-    var kernelFiltSA: String = _
+    @Args4jOption(required = true, name = "-kfe", aliases = Array("--kernelfilterexpr"), usage = "Variant filter expression for kernel")
+    var kernelFiltExprSA: String = _
 
-    @Args4jOption(required = true, name = "-a", aliases = Array("--assocfilter"), usage = "Variant filter for association")
-    var assocFiltSA: String = _
+    @Args4jOption(required = true, name = "-afe", aliases = Array("--assocfilterexpr"), usage = "Variant filter expression for association")
+    var assocFiltExprSA: String = _
 
-    @Args4jOption(required = false, name = "-reml", aliases = Array("--usereml"), usage = "Use reml to fit delta")
-    var useREML: Boolean = true
+    @Args4jOption(required = false, name = "-ml", aliases = Array("--useml"), usage = "Use ml instead of reml to fit delta")
+    var useML: Boolean = false
 
-    @Args4jOption(required = false, name = "-d", aliases = Array("--delta"), usage = "Fix a value for delta")
-    var delta: Double = _
+    @Args4jOption(required = false, name = "-delta", aliases = Array("--delta"), usage = "Fixed delta value (overrides fitting delta)")
+    var delta: Double = Double.NaN // is this right?
 
     @Args4jOption(required = false, name = "-r", aliases = Array("--root"), usage = "Variant annotation root, a period-delimited path starting with `va'")
     var root: String = "va.lmmreg"
@@ -99,7 +99,6 @@ object LinearMixedModelCommand extends Command {
           isTranspose = true))
 
     val completeSampleSet = completeSamples.toSet
-    val vdsForCompleteSamples = vds.filterSamples((s, sa) => completeSampleSet(s))
 
     val n = y.size
     val d = n - k - 2
@@ -114,10 +113,21 @@ object LinearMixedModelCommand extends Command {
       case None => DenseMatrix.ones[Double](n, 1)
     }
 
-    val vdsAssoc = vdsForCompleteSamples.filterVariantsExpr(options.assocFiltSA, keep = true)
-    val vdsKernel = vdsForCompleteSamples.filterVariantsExpr(options.kernelFiltSA, keep = true)
+    val vdsForCompleteSamples = vds.filterSamples((s, sa) => completeSampleSet(s))
+    val vdsAssoc = vdsForCompleteSamples.filterVariantsExpr(options.assocFiltExprSA, keep = true)
+    val vdsKernel = vdsForCompleteSamples.filterVariantsExpr(options.kernelFiltExprSA, keep = true)
 
-    val lmmreg = LMM.applyVds(vdsAssoc, vdsKernel, C, y, Option(options.delta), options.useREML)
+    val optDelta =
+      if (options.delta.isNaN)
+        None
+      else {
+        if (options.delta <= 0d)
+          fatal(s"delta must be positive, got ${ options.delta }")
+        else
+          Some(options.delta)
+      }
+
+    val lmmreg = LMM.applyVds(vdsAssoc, vdsKernel, C, y, optDelta, !options.useML) // FIXME: clean up ML versue REML
 
     val (newVAS, inserter) = vdsForCompleteSamples.insertVA(LMMStat.`type`, pathVA)
 
