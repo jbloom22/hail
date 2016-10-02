@@ -6,6 +6,7 @@ import breeze.stats.mean
 import breeze.stats.distributions._
 import org.apache.commons.math3.random.MersenneTwister
 import org.apache.spark.mllib.linalg.distributed.{IndexedRow, IndexedRowMatrix}
+import org.apache.spark.rdd.RDD
 import org.broadinstitute.hail.SparkSuite
 import org.testng.annotations.Test
 import org.broadinstitute.hail.utils._
@@ -77,7 +78,7 @@ class LinearMixedModelSuite extends SparkSuite {
 
     val results: Map[Int, LMMStat] = (0 until m).map { v =>
       val gts = G(::, v)
-      val stats = model.likelihoodRatioTest(Ut * gts)
+      val stats = model.likelihoodRatioTest(Ut, gts)
       (v, stats)
     }.toMap
 
@@ -141,7 +142,7 @@ class LinearMixedModelSuite extends SparkSuite {
       val chi2 = n * (model.logNullS2 - math.log(s2))
       val p = chiSquaredTail(1, chi2)
 
-      (v, LMMStat(DenseVector(b), s2, chi2, p))
+      (v, LMMStat(DenseVector(b), s2, delta, chi2, p))
     }.toMap
 
     println()
@@ -270,10 +271,15 @@ class LinearMixedModelSuite extends SparkSuite {
 
     val Wt = new IndexedRowMatrix(sc.makeRDD(Wcols), m, n)
 
-    val genotypes = new IndexedRowMatrix(sc.makeRDD(IndexedSeq[IndexedRow]()), 0, n)
-    val variants = Array[Variant]()
+//    val genotypes = new IndexedRowMatrix(sc.makeRDD(IndexedSeq[IndexedRow]()), 0, n)
+//    val variants = Array[Variant]()
+//    val lmmResult = LMM(Wt, variants, genotypes, C0, y0, None, useREML = false)
 
-    val lmmResult = LMM(Wt, variants, genotypes, C0, y0, None, useREML = false)
+    val variant = Variant("1", 2, "A", "C")
+    val x = Vector.fill[Double](n)(rand.gaussian.draw())
+    val G = sc.parallelize(Array((variant, x)))
+
+    val lmmResult = LMM(Wt, G, C0, y0, None, useREML = false)
     val model = lmmResult.diagLMM
 
     println()
@@ -288,7 +294,8 @@ class LinearMixedModelSuite extends SparkSuite {
     println("b")
     (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ model.nullB(i) }"))
 
-    val lmmResultR = LMM(Wt, variants, genotypes, C0, y0, None, useREML = true)
+//    val lmmResultR = LMM(Wt, variants, genotypes, C0, y0, None, useREML = true)
+    val lmmResultR = LMM(Wt, G, C0, y0, None, useREML = true)
     val modelR = lmmResultR.diagLMM
 
     println()
@@ -630,8 +637,8 @@ class LinearMixedModelSuite extends SparkSuite {
     printTime(computeSVD0(2000, 2000))
     println(4000)
     printTime(computeSVD0(4000, 4000))
-    println(8000)
-    printTime(computeSVD0(8000, 8000))
+//    println(8000)
+//    printTime(computeSVD0(8000, 8000))
 
   }
 }

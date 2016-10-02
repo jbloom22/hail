@@ -6,13 +6,13 @@ import org.apache.spark.mllib.linalg.SingularValueDecomposition
 import org.apache.spark.mllib.linalg.distributed.IndexedRowMatrix
 import org.apache.spark.rdd.RDD
 import org.broadinstitute.hail.annotations._
-import org.broadinstitute.hail.expr.{TDouble, TInt, TStruct, Type}
-import org.broadinstitute.hail.methods.{ToIndexedRowMatrix, ToStandardizedIndexedRowMatrix}
+import org.broadinstitute.hail.expr.{TDouble, TStruct, Type}
+import org.broadinstitute.hail.methods.{ToSparseIndexedRowMatrix, ToSparseRDD, ToStandardizedIndexedRowMatrix}
 import org.broadinstitute.hail.variant.{Genotype, Variant, VariantDataset}
 import org.broadinstitute.hail.utils._
 
 object LMM {
-  def applyVds(vds: VariantDataset,
+  def applyVds(vdsAssoc: VariantDataset,
     vdsKernel: VariantDataset,
     C: DenseMatrix[Double],
     y: DenseVector[Double],
@@ -20,14 +20,19 @@ object LMM {
     useREML: Boolean = true): LMMResult = {
 
     val Wt = ToStandardizedIndexedRowMatrix(vdsKernel)._2 // W is samples by variants, Wt is variants by samples
-    val (variants, genotypes) = ToIndexedRowMatrix(vds)
+    val G = ToSparseRDD(vdsAssoc)
 
-    LMM(Wt, variants, genotypes, C, y, optDelta)
+    LMM(Wt, G, C, y, optDelta)
+  }
+
+  def progressReport(msg: String) = {
+    val prog = s"\nprogresss: $msg, ${formatTime(System.nanoTime())}\n"
+    println(prog)
+    log.info(prog)
   }
 
   def apply(Wt: IndexedRowMatrix,
-    variants: Array[Variant],
-    genotypes: IndexedRowMatrix,
+    G: RDD[(Variant, Vector[Double])],
     C: DenseMatrix[Double],
     y: DenseVector[Double],
     optDelta: Option[Double] = None,
@@ -36,9 +41,8 @@ object LMM {
     assert(Wt.numCols == y.length)
 
     val n = y.length
-
-    println(formatTime(System.nanoTime()))
-    println("building K")
+    val m = Wt.numRows()
+    progressReport(s"Computing kernel for $n samples using $m variants....")
 
 //    val blockWt = Wt.toBlockMatrix().cache()
 //    val Kspark = blockWt.transpose.multiply(blockWt).toLocalMatrix().asInstanceOf[SDenseMatrix]
@@ -48,28 +52,44 @@ object LMM {
 
     val K = new DenseMatrix[Double](n, n, Kspark.values)
 
-    println(K(0,0))
-
-    println(formatTime(System.nanoTime()))
-    println("computing svd of K")
+    progressReport("Computing SVD... ") // should use better Lapack method
 
     val svdK = svd(K)
-    val U = svdK.U
-    val S = svdK.S
+    val Ut = svdK.U.t
+    val S = svdK.S //place S in global annotations?
+    assert(S.length == n)
 
-    println(S(0))
+    progressReport("Largest evals: " + (0 until math.min(n, 10)).map(S(_).formatted("%.5f")).mkString(", "))
+    progressReport("Smallest evals: " + ((n - 1) to math.max(0, n - 10) by -1).map(S(_).formatted("%.5f")).mkString(", "))
 
-    println(formatTime(System.nanoTime()))
-    println("building DiagLMM")
+    progressReport("Estimating delta... ")
 
-    val diagLMM = DiagLMM(U.t * C, U.t * y, S, optDelta, useREML)
+    val diagLMM = DiagLMM(Ut * C, Ut * y, S, optDelta, useREML)
 
-    val diagLMMBc = genotypes.rows.sparkContext.broadcast(diagLMM)
+    progressReport(s"delta = ${diagLMM.delta}, h2 = ${1d / diagLMM.delta}.")
 
-    val Uspark = new SDenseMatrix(n, n, U.data)
+    // temporary
+    val header = "rank\teval"
+    val evalString = (0 until n).map(i => s"$i\t${S(i)}").mkString("\n")
+//    val bw = new java.io.BufferedWriter(new java.io.FileWriter(new java.io.File("evals.tsv")))
+//    bw.write(s"$header\n$evalString\n")
+//    bw.close()
+    log.info(s"\nEIGENVALUES\n$header\n$evalString\n\n")
 
-    val lmmResult = genotypes.multiply(Uspark).rows.map(r =>
-      (variants(r.index.toInt), diagLMMBc.value.likelihoodRatioTest(toBDenseVector(r.vector.toDense))))
+//    val diagLMMBc = genotypes.rows.sparkContext.broadcast(diagLMM)
+//
+//    val Uspark = new SDenseMatrix(n, n, U.data)
+//
+//    val lmmResult = genotypes.multiply(Uspark).rows.map(r =>
+//      (variants(r.index.toInt), diagLMMBc.value.likelihoodRatioTest(toBDenseVector(r.vector.toDense))))
+
+    progressReport(s"Computing lmm statistics for each variant...")
+
+    val sc = G.sparkContext
+    val diagLMMBc = sc.broadcast(diagLMM)
+    val UtBc = sc.broadcast(Ut)
+
+    val lmmResult = G.mapValues( x => diagLMMBc.value.likelihoodRatioTest(UtBc.value, x))
 
     println(formatTime(System.nanoTime()))
 
@@ -81,7 +101,9 @@ object DiagLMM {
   def apply(C: DenseMatrix[Double], y: DenseVector[Double], S: DenseVector[Double], optDelta: Option[Double] = None, useREML: Boolean = true): DiagLMM = {
     require(C.rows == y.length)
 
-    val delta = optDelta.getOrElse(deltaGridVals(C, y, S, useREML).minBy(_._2)._1)
+    val delta = optDelta.getOrElse(fitDelta(C, y, S, useREML)._1)
+
+    // FIXME: add warning or fatal when delta is not in interior
 
     val n = y.length
     val D = S + delta
@@ -96,13 +118,13 @@ object DiagLMM {
     DiagLMM(C, y, dy, ydy, b, s2, math.log(s2), delta, D.map(1 / _), useREML)
   }
 
-  def deltaGridVals(C: DenseMatrix[Double], y: DenseVector[Double], S: DenseVector[Double], useREML: Boolean): IndexedSeq[(Double, Double)] = {
+  def fitDelta(C: DenseMatrix[Double], y: DenseVector[Double], S: DenseVector[Double], useREML: Boolean): (Double, IndexedSeq[(Double, Double)]) = {
 
-    val logmin = -10.0
-    val logmax = 10.0
-    val logres = 0.1
+    val logmin = -10
+    val logmax = 10
+    val pointsPerUnit = 100 // number of points per unit of log space
 
-    val grid = (logmin to logmax by logres).map(math.exp)
+    val grid = (logmin * pointsPerUnit to logmax * pointsPerUnit).map(_.toDouble / pointsPerUnit) // avoids rounding of (logmin to logmax by logres)
 
     val n = y.length
     val c = C.cols
@@ -123,7 +145,26 @@ object DiagLMM {
         sum(breeze.numerics.log(D)) + n * math.log(r)
     }
 
-    grid.map(delta => (delta, negLogLkhd(delta, useREML)))
+    val gridVals = grid.map(logDelta => (logDelta, negLogLkhd(math.exp(logDelta), useREML)))
+
+    // temporarily included to inspect delta optimization
+    // perhaps interesting to return "curvature" at maximum
+    val header = "logDelta\tnegLogLkhd"
+    val gridValsString = gridVals.map{ case (d, nll) => s"${d.formatted("%.2f")}\t$nll" }.mkString("\n")
+//    val bw = new java.io.BufferedWriter(new java.io.FileWriter(new java.io.File("delta.tsv")))
+//    bw.write(s"$header\n$gridValsString\n")
+//    bw.close()
+
+    log.info(s"\nDELTAVALUES\n$header\n$gridValsString\n\n")
+
+    val logDelta = gridVals.minBy(_._2)._1
+
+    if (logDelta == logmin)
+      fatal("failed to fit delta: maximum likelihood at lower search boundary 1e-10")
+    else if (logDelta == logmax)
+      fatal("failed to fit delta: maximum likelihood at upper search boundary 1e10")
+    
+    (math.exp(logDelta), gridVals)
   }
 }
 
@@ -139,10 +180,11 @@ case class DiagLMM(
   invD: DenseVector[Double],
   useREML: Boolean) {
 
-  def likelihoodRatioTest(x: DenseVector[Double]): LMMStat = {
-    require(x.length == y.length)
+  def likelihoodRatioTest(Ut: DenseMatrix[Double], x0: Vector[Double]): LMMStat = {
+    require(x0.length == y.length)
 
-    val n = x.length
+    val n = x0.length
+    val x = Ut * x0
     val X = DenseMatrix.horzcat(x.asDenseMatrix.t, C)
 
     val dX = X(::, *) :* invD
@@ -161,7 +203,7 @@ case class DiagLMM(
 object LMMStat {
   def `type`: Type = TStruct(
     ("beta", TDouble),
-    ("s2", TDouble),
+    ("sigmaG2", TDouble),
     ("chi2", TDouble),
     ("pval", TDouble))
 }
@@ -171,7 +213,6 @@ case class LMMStat(b: DenseVector[Double], s2: Double, chi2: Double, p: Double) 
 }
 
 case class LMMResult(diagLMM: DiagLMM, rdd: RDD[(Variant, LMMStat)])
-
 
 object LMMLowRank {
   def applyVds(vds: VariantDataset,
@@ -184,7 +225,7 @@ object LMMLowRank {
     useREML: Boolean = true): LMMResultLowRank = {
 
     val Wt = ToStandardizedIndexedRowMatrix(vds.filterVariants(filtGRM))._2 // W is samples by variants, Wt is variants by samples
-    val (variants, genotypes) = ToIndexedRowMatrix(vds.filterVariants(filtAssoc))
+    val (variants, genotypes) = ToSparseIndexedRowMatrix(vds.filterVariants(filtAssoc))
 
     LMMLowRank(Wt, variants, genotypes, C, y, k, optDelta, useREML)
   }
@@ -224,8 +265,6 @@ object LMMLowRank {
     val diagLMMLowRank = DiagLMMLowRank(n, Cp, yp, SB, ypy, Cpy, CpC, optDelta, useREML)
 
     val diagLMMLowRankBc = genotypes.rows.sparkContext.broadcast(diagLMMLowRank)
-
-    // FIXME: variant names are already local, we shouldn't be gathering them all, right?!
 
     // adding in y
     val U_y = Matrices.horzcat(Array(U, new SDenseMatrix(y.length, 1, y.toArray)))
