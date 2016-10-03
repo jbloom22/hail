@@ -6,7 +6,6 @@ import breeze.stats.mean
 import breeze.stats.distributions._
 import org.apache.commons.math3.random.MersenneTwister
 import org.apache.spark.mllib.linalg.distributed.{IndexedRow, IndexedRowMatrix}
-import org.apache.spark.rdd.RDD
 import org.broadinstitute.hail.SparkSuite
 import org.testng.annotations.Test
 import org.broadinstitute.hail.utils._
@@ -76,13 +75,13 @@ class LinearMixedModelSuite extends SparkSuite {
 
     val model = DiagLMM(C, y, S, Some(delta))
 
-    val results: Map[Int, LMMStat] = (0 until m).map { v =>
-      val gts = G(::, v)
-      val stats = model.likelihoodRatioTest(Ut, gts)
-      (v, stats)
-    }.toMap
-
-    results.foreach(println)
+//    val results: Map[Int, LMMStat] = (0 until m).map { v =>
+//      val gts = G(::, v)
+//      val stats = model.likelihoodRatioTest(Ut, gts)
+//      (v, stats)
+//    }.toMap
+//
+//    results.foreach(println)
 
 //    val sqrtD = sqrt(S + delta)
 //    val Cs = C(::, *) :/ sqrtD
@@ -142,7 +141,7 @@ class LinearMixedModelSuite extends SparkSuite {
       val chi2 = n * (model.logNullS2 - math.log(s2))
       val p = chiSquaredTail(1, chi2)
 
-      (v, LMMStat(DenseVector(b), s2, delta, chi2, p))
+      (v, LMMStat(DenseVector(b), s2, chi2, p))
     }.toMap
 
     println()
@@ -194,6 +193,10 @@ class LinearMixedModelSuite extends SparkSuite {
 
     val y0 = distY0.sample()
 
+    val variant = Variant("1", 2, "A", "C")
+    val x = Vector.fill[Double](n)(rand.gaussian.draw())
+    val G = sc.parallelize(Array((variant, x)))
+
     val Ut = svdW.U.t
 
     // println(Ut.cols, Ut.rows)
@@ -241,7 +244,7 @@ class LinearMixedModelSuite extends SparkSuite {
     implicit val rand: RandBasis = new RandBasis(new ThreadLocalRandomGenerator(new MersenneTwister(seed)))
 
     val n = 1000 // even
-    val m = 2000
+    val m = 1000
     //val variantIdx = 0 until m
     //val variants = (0 until m).map(i => Variant("1", i, "A", "C")).toArray
     val c = 5
@@ -267,6 +270,10 @@ class LinearMixedModelSuite extends SparkSuite {
 
     val y0 = distY0.sample()
 
+    val variant = Variant("1", 2, "A", "C")
+    val x = Vector.fill[Double](n)(rand.gaussian.draw())
+    val G = sc.parallelize(Array((variant, x)))
+
     val Wcols = (0 until W.cols).map(j => IndexedRow(j, toSDenseVector(W(::, j))))
 
     val Wt = new IndexedRowMatrix(sc.makeRDD(Wcols), m, n)
@@ -275,9 +282,6 @@ class LinearMixedModelSuite extends SparkSuite {
 //    val variants = Array[Variant]()
 //    val lmmResult = LMM(Wt, variants, genotypes, C0, y0, None, useREML = false)
 
-    val variant = Variant("1", 2, "A", "C")
-    val x = Vector.fill[Double](n)(rand.gaussian.draw())
-    val G = sc.parallelize(Array((variant, x)))
 
     val lmmResult = LMM(Wt, G, C0, y0, None, useREML = false)
     val model = lmmResult.diagLMM
@@ -293,6 +297,8 @@ class LinearMixedModelSuite extends SparkSuite {
     println()
     println("b")
     (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ model.nullB(i) }"))
+    println(s"x = $x")
+    println(lmmResult.rdd.collect()(0))
 
 //    val lmmResultR = LMM(Wt, variants, genotypes, C0, y0, None, useREML = true)
     val lmmResultR = LMM(Wt, G, C0, y0, None, useREML = true)
@@ -309,6 +315,8 @@ class LinearMixedModelSuite extends SparkSuite {
     println()
     println("b")
     (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ modelR.nullB(i) }"))
+    println(s"x = $x")
+    println(lmmResultR.rdd.collect()(0))
   }
 
   @Test def genAndFitLMMTestDistLowRank() {
@@ -343,12 +351,16 @@ class LinearMixedModelSuite extends SparkSuite {
 
     val y0 = distY0.sample()
 
+    val variant = Variant("1", 2, "A", "C")
+    val x = Vector.fill[Double](n)(rand.gaussian.draw())
+    // val G = sc.parallelize(Array((variant, x)))
+
     val Wcols = (0 until W.cols).map(j => IndexedRow(j, toSDenseVector(W(::, j))))
 
     val Wt = new IndexedRowMatrix(sc.makeRDD(Wcols), m, n)
 
-    val variants = Array[Variant]()
-    val genotypes = new IndexedRowMatrix(sc.makeRDD(IndexedSeq[IndexedRow]()), 0, n)
+    val variants = Array[Variant](variant)
+    val genotypes = new IndexedRowMatrix(sc.makeRDD(IndexedSeq[IndexedRow](IndexedRow(0L,toSVector(x)))), 1, n)
 
     val lmmResultLowRank = LMMLowRank(Wt, variants, genotypes, C0, y0, k, None, useREML = false)
     val model = lmmResultLowRank.diagLMMLowRank
@@ -363,6 +375,8 @@ class LinearMixedModelSuite extends SparkSuite {
     println()
     println("b")
     (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ model.nullB(i) }"))
+    println(s"x = $x")
+    println(lmmResultLowRank.rdd.collect()(0))
 
     val lmmResultLowRankR = LMMLowRank(Wt, variants, genotypes, C0, y0, k, None, useREML = true)
     val modelR = lmmResultLowRankR.diagLMMLowRank
@@ -375,10 +389,11 @@ class LinearMixedModelSuite extends SparkSuite {
     println("s2:")
     println(sigmaGSq)
     println(modelR.nullS2)
-
     println()
     println("b")
     (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ modelR.nullB(i) }"))
+    println(s"x = $x")
+    println(lmmResultLowRankR.rdd.collect()(0))
 
   }
 
