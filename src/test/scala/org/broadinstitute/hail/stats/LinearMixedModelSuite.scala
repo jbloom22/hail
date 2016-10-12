@@ -7,6 +7,8 @@ import breeze.stats.distributions._
 import org.apache.commons.math3.random.MersenneTwister
 import org.apache.spark.mllib.linalg.distributed.{IndexedRow, IndexedRowMatrix}
 import org.broadinstitute.hail.SparkSuite
+import org.broadinstitute.hail.io.vcf.LoadVCF
+import org.broadinstitute.hail.methods.ToNormalizedGtArray
 import org.testng.annotations.Test
 import org.broadinstitute.hail.utils._
 import org.broadinstitute.hail.variant.Variant
@@ -538,5 +540,18 @@ class LinearMixedModelSuite extends SparkSuite {
     println()
     println("b")
     (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ beta4(i) }"))
+  }
+
+  @Test def toNormalizedGtArrayTest() {
+    val vds = LoadVCF(sc, "src/test/resources/sample.vcf")
+    val n = vds.nSamples
+    val gtArrays = vds.rdd.collect().take(10).flatMap{ case (v, (va, gs)) => ToNormalizedGtArray(gs, n) }
+
+    println(nPresent, gtSum, gtSumSq)
+    println(gtMean)
+    println(gtStdDevN)
+
+    val dv = DenseVector(gtArray)
+    println(sum(dv), norm(dv))
   }
 }
