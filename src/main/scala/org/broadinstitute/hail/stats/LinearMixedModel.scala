@@ -3,11 +3,11 @@ package org.broadinstitute.hail.stats
 import breeze.linalg._
 import breeze.numerics.sqrt
 import org.apache.spark.mllib.linalg.{DenseMatrix => SDenseMatrix}
-import org.apache.spark.mllib.linalg.distributed.IndexedRowMatrix
+import org.apache.spark.mllib.linalg.distributed.RowMatrix}
 import org.apache.spark.rdd.RDD
 import org.broadinstitute.hail.annotations._
 import org.broadinstitute.hail.expr.{TDouble, TStruct, Type}
-import org.broadinstitute.hail.methods.{ToSparseRDD, ToStandardizedIndexedRowMatrix}
+import org.broadinstitute.hail.methods.{ToSampleNormalizedRowMatrix, ToSparseRDD}
 import org.broadinstitute.hail.variant.{Variant, VariantDataset}
 import org.broadinstitute.hail.utils._
 
@@ -19,7 +19,7 @@ object LMM {
     optDelta: Option[Double] = None,
     useREML: Boolean = true): LMMResult = {
 
-    val Wt = ToStandardizedIndexedRowMatrix(vdsKernel)._2 // W is samples by variants, Wt is variants by samples
+    val Wt = ToSampleNormalizedRowMatrix(vdsKernel) // W is samples by variants, Wt is variants by samples
     val G = ToSparseRDD(vdsAssoc)
 
     LMM(Wt, G, C, y, optDelta, useREML)
@@ -31,7 +31,7 @@ object LMM {
     log.info(prog)
   }
 
-  def apply(Wt: IndexedRowMatrix,
+  def apply(Wt: RowMatrix,
     G: RDD[(Variant, Vector[Double])],
     C: DenseMatrix[Double],
     y: DenseVector[Double],

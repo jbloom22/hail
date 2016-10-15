@@ -5,13 +5,16 @@ import breeze.numerics.sqrt
 import breeze.stats.mean
 import breeze.stats.distributions._
 import org.apache.commons.math3.random.MersenneTwister
-import org.apache.spark.mllib.linalg.distributed.{IndexedRow, IndexedRowMatrix}
+import org.apache.spark.mllib.linalg.distributed.{IndexedRow, IndexedRowMatrix, RowMatrix}
 import org.broadinstitute.hail.SparkSuite
 import org.broadinstitute.hail.io.vcf.LoadVCF
-import org.broadinstitute.hail.methods.ToNormalizedGtArray
+import org.broadinstitute.hail.methods.{ToNormalizedGtArray, ToRRM}
 import org.testng.annotations.Test
 import org.broadinstitute.hail.utils._
 import org.broadinstitute.hail.variant.Variant
+import com.github.fommil.netlib.BLAS.{getInstance => NativeBLAS}
+import org.apache.spark.mllib.linalg.{Vectors, DenseMatrix => SDenseMatrix, DenseVector => SDenseVector, Vector => SVector}
+
 
 class LinearMixedModelSuite extends SparkSuite {
 
@@ -163,7 +166,7 @@ class LinearMixedModelSuite extends SparkSuite {
 
     val C0 = DenseMatrix.horzcat(DenseMatrix.ones[Double](n, 1), DenseMatrix.fill[Double](n, c - 1)(rand.gaussian.draw()))
 
-    val W = DenseMatrix.vertcat(DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()), DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()) + .5)
+    val W = DenseMatrix.vertcat(DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()), DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()) + 1.0)
 
     for (i <- 0 until W.cols) {
       W(::, i) -= mean(W(::, i))
@@ -173,13 +176,13 @@ class LinearMixedModelSuite extends SparkSuite {
     println(formatTime(System.nanoTime()))
     println("computing svd of K")
 
-    val K = W * W.t
+    val K = W * W.t :* (1d / m)
 
     println(K(0,0))
 
     println(formatTime(System.nanoTime()))
     println("computing svd of W")
-    val svdW = svd(W)
+    val svdW = svd(W :* (1d / sqrt(m)))
 
     println(svdW.S(0))
 
@@ -188,7 +191,7 @@ class LinearMixedModelSuite extends SparkSuite {
 
 
     val sigmaGSq = 1d
-    val delta = 2d
+    val delta = 0.1d
     val V = sigmaGSq * (K + delta * DenseMatrix.eye[Double](n))
 
     val distY0 = MultivariateGaussian(C0 * b, V)(rand)
@@ -257,9 +260,9 @@ class LinearMixedModelSuite extends SparkSuite {
 
     val W = DenseMatrix.vertcat(DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()), DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()) + .5)
 
-    for (i <- 0 until W.cols) {
-      W(::, i) -= mean(W(::, i))
-      W(::, i) /= norm(W(::, i))
+    for (j <- 0 until W.cols) {
+      W(::, j) -= mean(W(::, j))
+      W(::, j) /= norm(W(::, j))
     }
 
     val K = W * W.t
@@ -276,9 +279,9 @@ class LinearMixedModelSuite extends SparkSuite {
     val x = Vector.fill[Double](n)(rand.gaussian.draw())
     val G = sc.parallelize(Array((variant, x)))
 
-    val Wcols = (0 until W.cols).map(j => IndexedRow(j, toSDenseVector(W(::, j))))
+    val Wcols = (0 until W.cols).map(j => toSDenseVector(W(::, j)))
 
-    val Wt = new IndexedRowMatrix(sc.makeRDD(Wcols), m, n)
+    val Wt = new RowMatrix(sc.makeRDD(Wcols), m, n)
 
 //    val genotypes = new IndexedRowMatrix(sc.makeRDD(IndexedSeq[IndexedRow]()), 0, n)
 //    val variants = Array[Variant]()
@@ -303,7 +306,7 @@ class LinearMixedModelSuite extends SparkSuite {
     println(lmmResult.rdd.collect()(0))
 
 //    val lmmResultR = LMM(Wt, variants, genotypes, C0, y0, None, useREML = true)
-    val lmmResultR = LMM(Wt, G, C0, y0, None, useREML = true)
+    val lmmResultR = LMM(K, G, C0, y0, None, useREML = true)
     val modelR = lmmResultR.diagLMM
 
     println()
@@ -545,13 +548,60 @@ class LinearMixedModelSuite extends SparkSuite {
   @Test def toNormalizedGtArrayTest() {
     val vds = LoadVCF(sc, "src/test/resources/sample.vcf")
     val n = vds.nSamples
-    val gtArrays = vds.rdd.collect().take(10).flatMap{ case (v, (va, gs)) => ToNormalizedGtArray(gs, n) }
+    val gtVects = vds.rdd.collect().take(10).flatMap{ case (v, (va, gs)) => ToNormalizedGtArray(gs, n) }.map(DenseVector(_))
 
-    println(nPresent, gtSum, gtSumSq)
-    println(gtMean)
-    println(gtStdDevN)
+    for (gts <- gtVects) {
+      assert(math.abs(mean(gts)) < 1e-6)
+      assert(D_==(norm(gts), 1d))
+    }
 
-    val dv = DenseVector(gtArray)
-    println(sum(dv), norm(dv))
+    val rows = vds.rdd.flatMap{ case (v, (va, gs)) => ToNormalizedGtArray(gs, n) }.map(Vectors.dense)
+    val row0 = toBDenseVector(rows.first().asInstanceOf[SDenseVector])
+    println(row0)
+    println(row0 dot row0)
+
+//    val rowMatrix = new RowMatrix(sc.parallelize(Array(rows.first())), 1, n)
+
+    val rowMatrix = new RowMatrix(rows, rows.count(), n)
+    val RRM = new DenseMatrix(n, n, rowMatrix.computeGramianMatrix().asInstanceOf[SDenseMatrix].values)
+    println(RRM)
+    //    println(RRM(0 to 4, 0 to 4))
+  }
+
+  @Test def RRMTest() {
+    val vds = LoadVCF(sc, "src/test/resources/sample.vcf")
+    val n = vds.nSamples
+    val gtVects = vds.rdd.collect().take(10).flatMap{ case (v, (va, gs)) => ToNormalizedGtArray(gs, n) }.map(DenseVector(_))
+
+    println(gtVects(0) dot gtVects(0))
+    println(gtVects(0) dot gtVects(1))
+    println(gtVects(1) dot gtVects(1))
+
+    val RRM = ToRRM(vds)
+
+    println(RRM)
+    println(RRM(0,0))
+    println(RRM(0,1))
+    println(RRM(1,0))
+    println(RRM(1,1))
+  }
+
+  @Test def dsyrkTest() {
+    val C = DenseVector(0.0, 0.0, 0.0, 0.0)
+    val A = Array(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+    val N = 2
+
+    val UPLO = "U"
+    val TRANS = "N"
+    val K = A.length / N
+    val ALPHA = 1d
+    val LDA = N
+    val BETA = 1d
+    val LDC = N
+
+    // http://www.netlib.org/lapack/explore-html/d1/d54/group__double__blas__level3_gae0ba56279ae3fa27c75fefbc4cc73ddf.html
+    NativeBLAS.dsyrk(UPLO, TRANS, N, K, ALPHA, A, LDA, BETA, C.data, LDC)
+
+    println(C)
   }
 }
