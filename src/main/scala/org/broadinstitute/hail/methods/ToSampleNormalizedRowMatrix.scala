@@ -153,6 +153,57 @@ object ToSparseIndexedRowMatrix {
   }
 }
 
+// These methods filter out constant vectors, but their names don't indicate it
+object ToSparseRDD {
+  def apply(vds: VariantDataset): RDD[(Variant, Vector[Double])] = {
+    val nSamples = vds.nSamples
+    val sampleIndexBc = vds.sparkContext.broadcast(vds.sampleIds.zipWithIndex.toMap)
+
+    vds.aggregateByVariantWithKeys[SparseGtBuilder](new SparseGtBuilder())(
+      (sb, v, s, g) => sb.merge(sampleIndexBc.value(s), g),
+      (sb1, sb2) => sb1.merge(sb2))
+      .flatMap { case (v, sb) => sb.toGtSSparseVector(nSamples).map((v, _)) }
+  }
+}
+
+
+object ToNormalizedGtArray {
+  def apply(gs: Iterable[Genotype], nSamples: Int): Option[Array[Double]] = {
+    val (nPresent, gtSum, gtSumSq) = gs.flatMap(_.gt).foldLeft((0, 0, 0))((acc, gt) => (acc._1 + 1, acc._2 + gt, acc._3 + gt * gt))
+    val nMissing = nSamples - nPresent
+    val allHomRef = gtSum == 0
+    val allHet = gtSum == nPresent && gtSumSq == nPresent
+    val allHomVar = gtSum == 2 * nPresent
+
+    if (allHomRef || allHomVar || allHet)
+      None
+    else {
+      val gtMean = gtSum.toDouble / nPresent
+      val gtSumSqAll = gtSumSq + nMissing * gtMean * gtMean
+      val gtSumAll = gtSum + nMissing * gtMean
+      val gtNormSqRec = 1d / math.sqrt(gtSumSqAll - gtSumAll * gtSumAll / nSamples)
+
+      Some(gs.map(_.gt.map(g => (g - gtMean) * gtNormSqRec).getOrElse(0d)).toArray)
+    }
+  }
+}
+
+// FIXME: reconcile with logreg copy
+object toGtDenseMatrix {
+  def apply(gs: Iterable[Genotype]): Option[DenseMatrix[Double]] = {
+    val (nPresent, gtSum, allHet) = gs.flatMap(_.nNonRefAlleles).foldLeft((0, 0, true))((acc, gt) => (acc._1 + 1, acc._2 + gt, acc._3 && (gt == 1)))
+
+    if (gtSum == 0 || gtSum == 2 * nPresent || allHet)
+      None
+    else {
+      val gtMean = gtSum.toDouble / nPresent
+      val gtArray = gs.map(_.gt.map(_.toDouble).getOrElse(gtMean)).toArray
+      Some(new DenseMatrix(gtArray.length, 1, gtArray))
+    }
+  }
+}
+
+// FIXME: not working
 object ToRRM {
   def apply(vds: VariantDataset): DenseMatrix[Double] = {
     require(vds.nSamples > 0)
@@ -206,54 +257,5 @@ object ToRRM {
       i += 1
     }
     C
-  }
-}
-
-// These methods filter out constant vectors, but their names don't indicate it
-object ToSparseRDD {
-  def apply(vds: VariantDataset): RDD[(Variant, Vector[Double])] = {
-    val nSamples = vds.nSamples
-    val sampleIndexBc = vds.sparkContext.broadcast(vds.sampleIds.zipWithIndex.toMap)
-
-    vds.aggregateByVariantWithKeys[SparseGtBuilder](new SparseGtBuilder())(
-      (sb, v, s, g) => sb.merge(sampleIndexBc.value(s), g),
-      (sb1, sb2) => sb1.merge(sb2))
-      .flatMap { case (v, sb) => sb.toGtSSparseVector(nSamples).map((v, _)) }
-  }
-}
-
-// FIXME: reconcile with logreg copy
-object toGtDenseMatrix {
-  def apply(gs: Iterable[Genotype]): Option[DenseMatrix[Double]] = {
-    val (nCalled, gtSum, allHet) = gs.flatMap(_.nNonRefAlleles).foldLeft((0, 0, true))((acc, gt) => (acc._1 + 1, acc._2 + gt, acc._3 && (gt == 1)))
-
-    // allHomRef || allHet || allHomVar || allNoCall
-    if (gtSum == 0 || allHet || gtSum == 2 * nCalled || nCalled == 0)
-      None
-    else {
-      val gtMean = gtSum.toDouble / nCalled
-      val gtArray = gs.map(_.gt.map(_.toDouble).getOrElse(gtMean)).toArray
-      Some(new DenseMatrix(gtArray.length, 1, gtArray))
-    }
-  }
-}
-
-// this version
-object ToNormalizedGtArray {
-  def apply(gs: Iterable[Genotype], nSamples: Int): Option[Array[Double]] = {
-    val (nPresent, gtSum, gtSumSq) = gs.flatMap(_.gt).foldLeft((0, 0, 0))((acc, gt) => (acc._1 + 1, acc._2 + gt, acc._3 + gt * gt ))
-    val nMissing = nSamples - nPresent
-
-    // (allHomRef or allNoCall) || allHet || allHomVar
-    if (gtSum == 0 || gtSum == nPresent && gtSumSq == nPresent || gtSum == 2 * nPresent)
-      None
-    else {
-      val gtMean = gtSum.toDouble / nPresent
-      val gtSumSqAll = gtSumSq + nMissing * gtMean * gtMean
-      val gtSumAll = gtSum + nMissing * gtMean
-      val gtNormSqRec = 1d / math.sqrt(gtSumSqAll - gtSumAll * gtSumAll / nSamples)
-
-      Some(gs.map(_.gt.map(g => (g -  gtMean) * gtNormSqRec).getOrElse(0d)).toArray)
-    }
   }
 }

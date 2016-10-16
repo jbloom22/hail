@@ -548,24 +548,12 @@ class LinearMixedModelSuite extends SparkSuite {
   @Test def toNormalizedGtArrayTest() {
     val vds = LoadVCF(sc, "src/test/resources/sample.vcf")
     val n = vds.nSamples
-    val gtVects = vds.rdd.collect().take(10).flatMap{ case (v, (va, gs)) => ToNormalizedGtArray(gs, n) }.map(DenseVector(_))
+    val gtVects = vds.rdd.collect().flatMap{ case (v, (va, gs)) => ToNormalizedGtArray(gs, n) }.map(DenseVector(_))
 
     for (gts <- gtVects) {
       assert(math.abs(mean(gts)) < 1e-6)
       assert(D_==(norm(gts), 1d))
     }
-
-    val rows = vds.rdd.flatMap{ case (v, (va, gs)) => ToNormalizedGtArray(gs, n) }.map(Vectors.dense)
-    val row0 = toBDenseVector(rows.first().asInstanceOf[SDenseVector])
-    println(row0)
-    println(row0 dot row0)
-
-//    val rowMatrix = new RowMatrix(sc.parallelize(Array(rows.first())), 1, n)
-
-    val rowMatrix = new RowMatrix(rows, rows.count(), n)
-    val RRM = new DenseMatrix(n, n, rowMatrix.computeGramianMatrix().asInstanceOf[SDenseMatrix].values)
-    println(RRM)
-    //    println(RRM(0 to 4, 0 to 4))
   }
 
   @Test def RRMTest() {
