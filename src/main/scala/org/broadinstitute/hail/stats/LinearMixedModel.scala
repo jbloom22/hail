@@ -10,52 +10,46 @@ import org.broadinstitute.hail.variant.{Variant, VariantDataset}
 import org.broadinstitute.hail.utils._
 
 object LMM {
-  def progressReport(msg: String) = {
-    val prog = s"\nlmmreg progress: $msg, ${ formatTime(System.nanoTime()) }\n"
-    //    println(prog)
-    log.info(prog)
-  }
-
   def apply(vdsKernel: VariantDataset,
     vdsAssoc: VariantDataset,
     C: DenseMatrix[Double],
     y: DenseVector[Double],
     optDelta: Option[Double] = None,
-    useML: Boolean = false): LMMResult = {
+    useML: Boolean = false,
+    useBlockedMatrix: Boolean = false): LMMResult = {
 
     val n = y.length
 
-    progressReport(s"Computing kernel for $n samples...")
+    info(s"lmmreg: Computing kernel for $n samples...")
 
-    val (kernel, m) = ComputeRRM.withoutBlocks(vdsKernel)
-    // val (kernel, m) = ComputeRRM.withBlocks(vdsKernel)
+    val (kernel, m) =
+      if (useBlockedMatrix)
+        ComputeRRM.withBlocks(vdsKernel)
+      else
+        ComputeRRM.withoutBlocks(vdsKernel)
     assert(kernel.rows == n && kernel.cols == n)
 
-    progressReport(s"RRM computed using $m variants. Computing eigenvectors... ") // should use better Lapack method
+    info(s"lmmreg: RRM computed using $m variants. Computing eigenvectors... ") // should use better Lapack method
 
     val eigK = eigSymD(kernel)
     val Ut = eigK.eigenvectors.t
     val S = eigK.eigenvalues //place S in global annotations?
     assert(S.length == n)
 
-    progressReport("Largest evals: " + ((n - 1) to math.max(0, n - 10) by -1).map(S(_).formatted("%.5f")).mkString(", "))
-    progressReport("Smallest evals: " + (0 until math.min(n, 10)).map(S(_).formatted("%.5f")).mkString(", "))
-
-    progressReport(s"Estimating delta using ${if (useML) "ML" else "REML"}... ")
+    info("lmmreg: Largest evals: " + ((n - 1) to math.max(0, n - 10) by -1).map(S(_).formatted("%.5f")).mkString(", "))
+    info("lmmreg: Smallest evals: " + (0 until math.min(n, 10)).map(S(_).formatted("%.5f")).mkString(", "))
+    info(s"lmmreg: Estimating delta using ${if (useML) "ML" else "REML"}... ")
 
     val UtC = Ut * C
     val Uty = Ut * y
 
     val diagLMM = DiagLMM(UtC, Uty, S, optDelta, useML)
 
-    progressReport(s"delta = ${diagLMM.delta}")
+    val header = "rank\teval"
+    val evalString = (0 until n).map(i => s"$i\t${S(i)}").mkString("\n")
+    log.info(s"\nEIGENVALUES\n$header\n$evalString\n\n")
 
-//  // temporary
-//  val header = "rank\teval"
-//  val evalString = (0 until n).map(i => s"$i\t${S(i)}").mkString("\n")
-//  log.info(s"\nEIGENVALUES\n$header\n$evalString\n\n")
-
-    progressReport(s"Computing LMM statistics for each variant...")
+    info(s"lmmreg: delta = ${diagLMM.delta}. Computing LMM statistics for each variant...")
 
     val T = Ut(::,*) :* diagLMM.sqrtInvD
     val Qt = qr.reduced.justQ(diagLMM.TC).t
@@ -69,8 +63,6 @@ object LMM {
     val scalerLMMBc = sc.broadcast(ScalerLMM(diagLMM.Ty, diagLMM.TyTy, Qt, QtTy, TyQtTy, diagLMM.logNullS2, useML))
 
     val lmmResult = G.mapValues(x => scalerLMMBc.value.likelihoodRatioTest(TBc.value * x))
-
-    println(formatTime(System.nanoTime()))
 
     LMMResult(diagLMM, lmmResult)
   }
@@ -124,11 +116,9 @@ object DiagLMM {
 
     val gridVals = grid.map(logDelta => (logDelta, negLogLkhd(math.exp(logDelta), useML)))
 
-    // temporarily included to inspect delta optimization
-    // perhaps interesting to return "curvature" at maximum
-    // val header = "logDelta\tnegLogLkhd"
-    // val gridValsString = gridVals.map{ case (d, nll) => s"${d.formatted("%.4f")}\t$nll" }.mkString("\n")
-    // log.info(s"\nDELTAVALUES\n$header\n$gridValsString\n\n")
+    val header = "logDelta\tnegLogLkhd"
+    val gridValsString = gridVals.map{ case (d, nll) => s"${d.formatted("%.4f")}\t$nll" }.mkString("\n")
+    log.info(s"\nDELTAVALUES\n$header\n$gridValsString\n\n")
 
     val logDelta = gridVals.minBy(_._2)._1
 
@@ -176,7 +166,6 @@ case class ScalerLMM(
     LMMStat(b, s2, chi2, p)
   }
 }
-
 
 object LMMStat {
   def `type`: Type = TStruct(

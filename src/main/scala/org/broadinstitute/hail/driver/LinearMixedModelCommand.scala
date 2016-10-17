@@ -21,16 +21,19 @@ object LinearMixedModelCommand extends Command {
     var covSA: String = ""
 
     @Args4jOption(required = true, name = "-kfe", aliases = Array("--kernelfilterexpr"), usage = "Variant filter expression for kernel")
-    var kernelFiltExprSA: String = _
+    var kernelFiltExprVA: String = _
 
-    @Args4jOption(required = true, name = "-afe", aliases = Array("--assocfilterexpr"), usage = "Variant filter expression for association")
-    var assocFiltExprSA: String = _
+    @Args4jOption(required = false, name = "-afe", aliases = Array("--assocfilterexpr"), usage = "Variant filter expression for association")
+    var assocFiltExprVA: String = _
 
-    @Args4jOption(required = false, name = "-ml", aliases = Array("--useml"), usage = "Use ml instead of reml to fit delta")
+    @Args4jOption(required = false, name = "-ml", aliases = Array("--useml"), usage = "Use ML instead of REML to fit delta")
     var useML: Boolean = false
 
-    @Args4jOption(required = false, name = "-delta", aliases = Array("--delta"), usage = "Fixed delta value (overrides fitting delta)")
-    var delta: Double = Double.NaN // is this right?
+    @Args4jOption(required = false, name = "-b", aliases = Array("--block"), usage = "Use BlockedMatrix to compute kernel")
+    var useBlockedMatrix: Boolean = false
+
+    @Args4jOption(required = false, name = "-d", aliases = Array("--delta"), usage = "Fixed delta value (overrides fitting delta)")
+    var delta: java.lang.Double = _
 
     @Args4jOption(required = false, name = "-r", aliases = Array("--root"), usage = "Variant annotation root, a period-delimited path starting with `va'")
     var root: String = "va.lmmreg"
@@ -114,24 +117,21 @@ object LinearMixedModelCommand extends Command {
     }
 
     val vdsForCompleteSamples = vds.filterSamples((s, sa) => completeSampleSet(s))
-    val vdsAssoc = vdsForCompleteSamples.filterVariantsExpr(options.assocFiltExprSA, keep = true)
-    val vdsKernel = vdsForCompleteSamples.filterVariantsExpr(options.kernelFiltExprSA, keep = true)
+    val vdsKernel = vdsForCompleteSamples.filterVariantsExpr(options.kernelFiltExprVA, keep = true)
+    val vdsAssoc = Option(options.assocFiltExprVA)
+      .map(expr => vdsForCompleteSamples.filterVariantsExpr(expr, keep = true))
+      .getOrElse(vdsForCompleteSamples)
 
-    val optDelta =
-      if (options.delta.isNaN)
-        None
-      else {
-        if (options.delta <= 0d)
-          fatal(s"delta must be positive, got ${ options.delta }")
-        else
-          Some(options.delta)
-      }
+    val optDelta = Option(options.delta).map(_.doubleValue())
+    optDelta.foreach(delta =>
+      if (delta <= 0d)
+          fatal(s"delta must be positive, got ${ delta }"))
 
-    val lmmreg = LMM(vdsKernel, vdsAssoc, C, y, optDelta, options.useML)
+    val lmmreg = LMM(vdsKernel, vdsAssoc, C, y, optDelta, options.useML, options.useBlockedMatrix)
 
     val (newVAS, inserter) = vdsForCompleteSamples.insertVA(LMMStat.`type`, pathVA)
 
-    state.copy(
+    val newState = state.copy(
       vds = vds.copy(
         rdd = vds.rdd.orderedLeftJoinDistinct(lmmreg.rdd.toOrderedRDD)
           .mapValues{ case ((va, gs), optlmmstat) => (inserter(va, optlmmstat.map(_.toAnnotation)), gs) }
@@ -139,5 +139,9 @@ object LinearMixedModelCommand extends Command {
         vaSignature = newVAS
       )
     )
+
+    info("lmmreg: Finished annotating variants.")
+
+    newState
   }
 }
