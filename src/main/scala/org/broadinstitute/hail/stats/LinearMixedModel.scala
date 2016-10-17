@@ -2,86 +2,58 @@ package org.broadinstitute.hail.stats
 
 import breeze.linalg._
 import breeze.numerics.sqrt
-import org.apache.spark.mllib.linalg.{DenseMatrix => SDenseMatrix}
-import org.apache.spark.mllib.linalg.distributed.RowMatrix}
 import org.apache.spark.rdd.RDD
 import org.broadinstitute.hail.annotations._
 import org.broadinstitute.hail.expr.{TDouble, TStruct, Type}
-import org.broadinstitute.hail.methods.{ToSampleNormalizedRowMatrix, ToSparseRDD}
+import org.broadinstitute.hail.methods.{ComputeRRM, ToSparseRDD}
 import org.broadinstitute.hail.variant.{Variant, VariantDataset}
 import org.broadinstitute.hail.utils._
 
 object LMM {
-  def applyVds(vdsAssoc: VariantDataset,
-    vdsKernel: VariantDataset,
-    C: DenseMatrix[Double],
-    y: DenseVector[Double],
-    optDelta: Option[Double] = None,
-    useREML: Boolean = true): LMMResult = {
-
-    val Wt = ToSampleNormalizedRowMatrix(vdsKernel) // W is samples by variants, Wt is variants by samples
-    val G = ToSparseRDD(vdsAssoc)
-
-    LMM(Wt, G, C, y, optDelta, useREML)
-  }
-
   def progressReport(msg: String) = {
-    val prog = s"\nprogresss: $msg, ${formatTime(System.nanoTime())}\n"
-//    println(prog)
+    val prog = s"\nlmmreg progress: $msg, ${ formatTime(System.nanoTime()) }\n"
+    //    println(prog)
     log.info(prog)
   }
 
-  def apply(Wt: RowMatrix,
-    G: RDD[(Variant, Vector[Double])],
+  def apply(vdsKernel: VariantDataset,
+    vdsAssoc: VariantDataset,
     C: DenseMatrix[Double],
     y: DenseVector[Double],
     optDelta: Option[Double] = None,
-    useREML: Boolean = true): LMMResult = {
-
-    assert(Wt.numCols == y.length)
+    useML: Boolean = false): LMMResult = {
 
     val n = y.length
-    val m = Wt.numRows()
-    progressReport(s"Computing kernel for $n samples using $m variants....")
 
-    val Kspark = Wt.computeGramianMatrix().asInstanceOf[SDenseMatrix]
-    // val blockWt = Wt.toBlockMatrix().cache()
-    //    val Kspark = blockWt.transpose.multiply(blockWt).toLocalMatrix().asInstanceOf[SDenseMatrix]
-    //    assert(Kspark.numCols == n && Kspark.numRows == n)
+    progressReport(s"Computing kernel for $n samples...")
 
-    val K = new DenseMatrix[Double](n, n, Kspark.values)
+    val (kernel, m) = ComputeRRM.withoutBlocks(vdsKernel)
+    // val (kernel, m) = ComputeRRM.withBlocks(vdsKernel)
+    assert(kernel.rows == n && kernel.cols == n)
 
-    progressReport("Computing SVD... ") // should use better Lapack method
+    progressReport(s"RRM computed using $m variants. Computing eigenvectors... ") // should use better Lapack method
 
-    val eigK = eigSymD(K)
+    val eigK = eigSymD(kernel)
     val Ut = eigK.eigenvectors.t
     val S = eigK.eigenvalues //place S in global annotations?
     assert(S.length == n)
 
-    progressReport("Largest evals: " + (0 until math.min(n, 10)).map(S(_).formatted("%.5f")).mkString(", "))
-    progressReport("Smallest evals: " + ((n - 1) to math.max(0, n - 10) by -1).map(S(_).formatted("%.5f")).mkString(", "))
+    progressReport("Largest evals: " + ((n - 1) to math.max(0, n - 10) by -1).map(S(_).formatted("%.5f")).mkString(", "))
+    progressReport("Smallest evals: " + (0 until math.min(n, 10)).map(S(_).formatted("%.5f")).mkString(", "))
 
-    progressReport(s"Estimating delta using ${if (useREML) "REML" else "ML"}... ")
+    progressReport(s"Estimating delta using ${if (useML) "ML" else "REML"}... ")
 
     val UtC = Ut * C
     val Uty = Ut * y
 
-    val diagLMM = DiagLMM(UtC, Uty, S, optDelta, useREML)
+    val diagLMM = DiagLMM(UtC, Uty, S, optDelta, useML)
 
     progressReport(s"delta = ${diagLMM.delta}")
 
-    // temporary
-    val header = "rank\teval"
-    val evalString = (0 until n).map(i => s"$i\t${S(i)}").mkString("\n")
-//    log.info(s"\nEIGENVALUES\n$header\n$evalString\n\n")
-//    val bw = new java.io.BufferedWriter(new java.io.FileWriter(new java.io.File("evals.tsv")))
-//    bw.write(s"$header\n$evalString\n")
-//    bw.close()
-
-//    val diagLMMBc = genotypes.rows.sparkContext.broadcast(diagLMM)
-//    val Uspark = new SDenseMatrix(n, n, U.data)
-//    val lmmResult = genotypes.multiply(Uspark).rows.map(r =>
-//      (variants(r.index.toInt), diagLMMBc.value.likelihoodRatioTest(toBDenseVector(r.vector.toDense))))
+//  // temporary
+//  val header = "rank\teval"
+//  val evalString = (0 until n).map(i => s"$i\t${S(i)}").mkString("\n")
+//  log.info(s"\nEIGENVALUES\n$header\n$evalString\n\n")
 
     progressReport(s"Computing LMM statistics for each variant...")
 
@@ -90,10 +62,11 @@ object LMM {
     val QtTy = Qt * diagLMM.Ty
     val TyQtTy = (diagLMM.Ty dot diagLMM.Ty) - (QtTy dot QtTy)
 
+    val G = ToSparseRDD(vdsAssoc)
     val sc = G.sparkContext
     val TBc = sc.broadcast(T)
 
-    val scalerLMMBc = sc.broadcast(ScalerLMM(diagLMM.Ty, diagLMM.TyTy, Qt, QtTy, TyQtTy, diagLMM.logNullS2, useREML))
+    val scalerLMMBc = sc.broadcast(ScalerLMM(diagLMM.Ty, diagLMM.TyTy, Qt, QtTy, TyQtTy, diagLMM.logNullS2, useML))
 
     val lmmResult = G.mapValues(x => scalerLMMBc.value.likelihoodRatioTest(TBc.value * x))
 
@@ -104,10 +77,10 @@ object LMM {
 }
 
 object DiagLMM {
-  def apply(C: DenseMatrix[Double], y: DenseVector[Double], S: DenseVector[Double], optDelta: Option[Double] = None, useREML: Boolean = true): DiagLMM = {
+  def apply(C: DenseMatrix[Double], y: DenseVector[Double], S: DenseVector[Double], optDelta: Option[Double] = None, useML: Boolean = false): DiagLMM = {
     require(C.rows == y.length)
 
-    val delta = optDelta.getOrElse(fitDelta(C, y, S, useREML)._1)
+    val delta = optDelta.getOrElse(fitDelta(C, y, S, useML)._1)
 
     val n = y.length
     val sqrtInvD = sqrt(S + delta).map(1 / _)
@@ -117,12 +90,12 @@ object DiagLMM {
     val TCTy = TC.t * Ty
     val TCTC = TC.t * TC
     val b = TCTC \ TCTy
-    val s2 = (TyTy - (TCTy dot b)) / (if (useREML) n - C.cols else n)
+    val s2 = (TyTy - (TCTy dot b)) / (if (useML) n else n - C.cols)
 
-    DiagLMM(b, s2, math.log(s2), delta, sqrtInvD, TC, Ty, TyTy, useREML)
+    DiagLMM(b, s2, math.log(s2), delta, sqrtInvD, TC, Ty, TyTy, useML)
   }
 
-  def fitDelta(C: DenseMatrix[Double], y: DenseVector[Double], S: DenseVector[Double], useREML: Boolean): (Double, IndexedSeq[(Double, Double)]) = {
+  def fitDelta(C: DenseMatrix[Double], y: DenseVector[Double], S: DenseVector[Double], useML: Boolean): (Double, IndexedSeq[(Double, Double)]) = {
 
     val logmin = -10
     val logmax = 10
@@ -134,7 +107,7 @@ object DiagLMM {
     val c = C.cols
 
     // up to constant shift and scale by 2
-    def negLogLkhd(delta: Double, useREML: Boolean): Double = {
+    def negLogLkhd(delta: Double, useML: Boolean): Double = {
       val D = S + delta
       val dy = y :/ D
       val ydy = y dot dy
@@ -143,23 +116,19 @@ object DiagLMM {
       val b = CdC \ Cdy
       val r = ydy - (Cdy dot b)
 
-      if (useREML)
-        sum(breeze.numerics.log(D)) + (n - c) * math.log(r) + logdet(CdC)._2
-      else
+      if (useML)
         sum(breeze.numerics.log(D)) + n * math.log(r)
+      else
+        sum(breeze.numerics.log(D)) + (n - c) * math.log(r) + logdet(CdC)._2
     }
 
-    val gridVals = grid.map(logDelta => (logDelta, negLogLkhd(math.exp(logDelta), useREML)))
+    val gridVals = grid.map(logDelta => (logDelta, negLogLkhd(math.exp(logDelta), useML)))
 
     // temporarily included to inspect delta optimization
     // perhaps interesting to return "curvature" at maximum
-//    val header = "logDelta\tnegLogLkhd"
-//    val gridValsString = gridVals.map{ case (d, nll) => s"${d.formatted("%.4f")}\t$nll" }.mkString("\n")
-//    val bw = new java.io.BufferedWriter(new java.io.FileWriter(new java.io.File("delta.tsv")))
-//    bw.write(s"$header\n$gridValsString\n")
-//    bw.close()
-
-//    log.info(s"\nDELTAVALUES\n$header\n$gridValsString\n\n")
+    // val header = "logDelta\tnegLogLkhd"
+    // val gridValsString = gridVals.map{ case (d, nll) => s"${d.formatted("%.4f")}\t$nll" }.mkString("\n")
+    // log.info(s"\nDELTAVALUES\n$header\n$gridValsString\n\n")
 
     val logDelta = gridVals.minBy(_._2)._1
 
@@ -181,7 +150,7 @@ case class DiagLMM(
   TC: DenseMatrix[Double],
   Ty: DenseVector[Double],
   TyTy: Double,
-  useREML: Boolean)
+  useML: Boolean)
 
 case class ScalerLMM(
   y: DenseVector[Double],
@@ -190,7 +159,7 @@ case class ScalerLMM(
   Qty: DenseVector[Double],
   yQty: Double,
   logNullS2: Double,
-  useREML: Boolean) {
+  useML: Boolean) {
 
   def likelihoodRatioTest(x: Vector[Double]): LMMStat = {
 
@@ -200,7 +169,7 @@ case class ScalerLMM(
     val xQty: Double = (x dot y) - (Qtx dot Qty)
 
     val b: Double = xQty / xQtx
-    val s2 = (yQty - xQty * b) / (if (useREML) n - Qt.rows else n)
+    val s2 = (yQty - xQty * b) / (if (useML) n else n - Qt.rows)
     val chi2 = n * (logNullS2 - math.log(s2))
     val p = chiSquaredTail(1, chi2)
 

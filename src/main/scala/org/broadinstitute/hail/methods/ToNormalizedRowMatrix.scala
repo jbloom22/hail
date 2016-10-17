@@ -5,13 +5,12 @@ import org.apache.spark.mllib.linalg.{Vectors, SparseVector => SSparseVector, De
 import org.apache.spark.mllib.linalg.distributed.{IndexedRow, IndexedRowMatrix, RowMatrix}
 import org.apache.spark.rdd.RDD
 import org.broadinstitute.hail.utils._
-import org.broadinstitute.hail.variant.{Genotype, GenotypeStream, Variant, VariantDataset}
-import com.github.fommil.netlib.{BLAS => NetlibBLAS, F2jBLAS}
+import org.broadinstitute.hail.variant.{Genotype, Variant, VariantDataset}
 import com.github.fommil.netlib.BLAS.{getInstance => NativeBLAS}
 
 import scala.collection.mutable
 
-object ToSampleNormalizedRowMatrix {
+object ToNormalizedRowMatrix {
   def apply(vds: VariantDataset): RowMatrix = {
     val n = vds.nSamples
     val rows = vds.rdd.flatMap { case (v, (va, gs)) => ToNormalizedGtArray(gs, n) }.map(Vectors.dense)
@@ -20,7 +19,7 @@ object ToSampleNormalizedRowMatrix {
   }
 }
 
-object ToSampleNormalizedIndexedRowMatrix {
+object ToNormalizedIndexedRowMatrix {
   def apply(vds: VariantDataset): IndexedRowMatrix = {
     val n = vds.nSamples
     val variants = vds.variants.collect()
@@ -32,17 +31,32 @@ object ToSampleNormalizedIndexedRowMatrix {
 }
 
 object ComputeGrammian {
-  def withGrammian(vds: VariantDataset): DenseMatrix[Double] = {
-    val n = vds.nSamples
-    val G = ToSampleNormalizedRowMatrix(vds).computeGramianMatrix()
-    new DenseMatrix[Double](n, n, G.asInstanceOf[SDenseMatrix].values)
+  def apply(A: RowMatrix): DenseMatrix[Double] = {
+    val n = A.numCols().toInt
+    val G = A.computeGramianMatrix().asInstanceOf[SDenseMatrix].values
+    new DenseMatrix[Double](n, n, G)
   }
 
-  def withBlock(vds: VariantDataset): DenseMatrix[Double] = {
-    val n = vds.nSamples
-    val B = ToSampleNormalizedIndexedRowMatrix(vds).toBlockMatrix().cache()
-    val G = B.transpose.multiply(B).toLocalMatrix()
-    new DenseMatrix[Double](n, n, G.asInstanceOf[SDenseMatrix].values)
+  def apply(A: IndexedRowMatrix): DenseMatrix[Double] = {
+    val n = A.numCols().toInt
+    val B = A.toBlockMatrix().cache()
+    val G = B.transpose.multiply(B).toLocalMatrix().asInstanceOf[SDenseMatrix].values
+    B.blocks.unpersist()
+    new DenseMatrix[Double](n, n, G)
+  }
+}
+
+object ComputeRRM {
+  def withoutBlocks(vds: VariantDataset): (DenseMatrix[Double], Int) = {
+    val A = ToNormalizedRowMatrix(vds)
+    val mRec = 1d / A.numRows()
+    (ComputeGrammian(A) :* mRec, A.numRows().toInt)
+  }
+
+  def withBlocks(vds: VariantDataset): (DenseMatrix[Double], Int) = {
+    val A = ToNormalizedIndexedRowMatrix(vds)
+    val mRec = 1d / A.numRows()
+    (ComputeGrammian(A) :* mRec, A.numRows().toInt)
   }
 }
 
@@ -167,6 +181,7 @@ object ToSparseRDD {
 }
 
 
+// mean centered and variance normalized
 object ToNormalizedGtArray {
   def apply(gs: Iterable[Genotype], nSamples: Int): Option[Array[Double]] = {
     val (nPresent, gtSum, gtSumSq) = gs.flatMap(_.gt).foldLeft((0, 0, 0))((acc, gt) => (acc._1 + 1, acc._2 + gt, acc._3 + gt * gt))
@@ -179,11 +194,14 @@ object ToNormalizedGtArray {
       None
     else {
       val gtMean = gtSum.toDouble / nPresent
-      val gtSumSqAll = gtSumSq + nMissing * gtMean * gtMean
-      val gtSumAll = gtSum + nMissing * gtMean
-      val gtNormSqRec = 1d / math.sqrt(gtSumSqAll - gtSumAll * gtSumAll / nSamples)
+      val gtMeanAll = (gtSum + nMissing * gtMean) / nSamples
+      val gtMeanSqAll = (gtSumSq + nMissing * gtMean * gtMean) / nSamples
+      val gtStdDevRec = 1d / math.sqrt(gtMeanSqAll - gtMeanAll * gtMeanAll)
 
-      Some(gs.map(_.gt.map(g => (g - gtMean) * gtNormSqRec).getOrElse(0d)).toArray)
+      if (gtStdDevRec.isNaN())
+        println(gtSum, gtSumSq, gtMeanSqAll, gtMeanAll * gtMeanAll, gs.map(_.gt.get))
+
+      Some(gs.map(_.gt.map(g => (g - gtMean) * gtStdDevRec).getOrElse(0d)).toArray)
     }
   }
 }

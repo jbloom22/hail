@@ -127,7 +127,7 @@ object LinearMixedModelCommand extends Command {
           Some(options.delta)
       }
 
-    val lmmreg = LMM.applyVds(vdsAssoc, vdsKernel, C, y, optDelta, !options.useML) // FIXME: clean up ML versue REML
+    val lmmreg = LMM(vdsKernel, vdsAssoc, C, y, optDelta, options.useML)
 
     val (newVAS, inserter) = vdsForCompleteSamples.insertVA(LMMStat.`type`, pathVA)
 

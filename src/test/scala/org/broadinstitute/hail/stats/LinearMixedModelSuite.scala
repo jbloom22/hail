@@ -5,10 +5,10 @@ import breeze.numerics.sqrt
 import breeze.stats.mean
 import breeze.stats.distributions._
 import org.apache.commons.math3.random.MersenneTwister
-import org.apache.spark.mllib.linalg.distributed.{IndexedRow, IndexedRowMatrix, RowMatrix}
-import org.broadinstitute.hail.SparkSuite
+import org.apache.spark.mllib.linalg.distributed.RowMatrix
+import org.broadinstitute.hail.{SparkSuite, TestUtils}
 import org.broadinstitute.hail.io.vcf.LoadVCF
-import org.broadinstitute.hail.methods.{ToNormalizedGtArray, ToRRM}
+import org.broadinstitute.hail.methods._
 import org.testng.annotations.Test
 import org.broadinstitute.hail.utils._
 import org.broadinstitute.hail.variant.Variant
@@ -213,7 +213,7 @@ class LinearMixedModelSuite extends SparkSuite {
     val y = Ut * y0
     val C = Ut * C0
 
-    val model = DiagLMM(C, y, S, optDelta = None, useREML = false)
+    val model = DiagLMM(C, y, S, optDelta = None, useML = false)
     //val model = DiagLMM(C, y, S)
 
     println()
@@ -228,7 +228,7 @@ class LinearMixedModelSuite extends SparkSuite {
     println("b")
     (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ model.nullB(i) }"))
 
-    val modelR = DiagLMM(C, y, S, optDelta = None, useREML = true)
+    val modelR = DiagLMM(C, y, S, optDelta = None, useML = true)
     //val model = DiagLMM(C, y, S)
 
     println()
@@ -245,50 +245,37 @@ class LinearMixedModelSuite extends SparkSuite {
   }
 
   @Test def genAndFitLMMTestDist() {
+
     val seed = 1
-    implicit val rand: RandBasis = new RandBasis(new ThreadLocalRandomGenerator(new MersenneTwister(seed)))
+    scala.util.Random.setSeed(seed)
 
     val n = 1000 // even
+    assert(n % 4 == 0)
     val m = 1000
-    //val variantIdx = 0 until m
-    //val variants = (0 until m).map(i => Variant("1", i, "A", "C")).toArray
     val c = 5
-
     val b = DenseVector(2.0, 1.0, 0.0, -1.0, -2.0) // length is c
+    val sigmaGSq = 10d
+    val delta = 0.1d
 
-    val C0 = DenseMatrix.horzcat(DenseMatrix.ones[Double](n, 1), DenseMatrix.fill[Double](n, c - 1)(rand.gaussian.draw()))
+    val C = DenseMatrix.fill[Double](n, c)(scala.util.Random.nextGaussian())
 
-    val W = DenseMatrix.vertcat(DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()), DenseMatrix.fill[Double](n / 2, m)(rand.gaussian.draw()) + .5)
+    val W1 = DenseMatrix.fill[Int](n / 4, m)(scala.util.Random.nextInt(2))
+    val W2 = DenseMatrix.fill[Int](n / 2, m)(scala.util.Random.nextInt(2) * 2)
+    val W3 = DenseMatrix.fill[Int](n / 4, m)(scala.util.Random.nextInt(2) + 1)
+    val W = DenseMatrix.vertcat(W1, W2, W3)
 
-    for (j <- 0 until W.cols) {
-      W(::, j) -= mean(W(::, j))
-      W(::, j) /= norm(W(::, j))
-    }
+    val vdsKernel = TestUtils.vdsFromMatrix(sc)(W)
+    val K = ComputeRRM.withoutBlocks(vdsKernel)._1
+    // val K = ComputeRRM.withBlocks(vdsKernel)._1
 
-    val K = W * W.t
-
-    val sigmaGSq = 1d
-    val delta = 2d
     val V = sigmaGSq * (K + delta * DenseMatrix.eye[Double](n))
+    val y = C * b + (cholesky(V) * DenseVector.fill[Double](n)(scala.util.Random.nextGaussian()))
 
-    val distY0 = MultivariateGaussian(C0 * b, V)(rand)
+    val M = 5
+    val G = DenseMatrix.fill[Int](n,M)(scala.util.Random.nextInt(3))
+    val vdsAssoc = TestUtils.vdsFromMatrix(sc)(G)
 
-    val y0 = distY0.sample()
-
-    val variant = Variant("1", 2, "A", "C")
-    val x = Vector.fill[Double](n)(rand.gaussian.draw())
-    val G = sc.parallelize(Array((variant, x)))
-
-    val Wcols = (0 until W.cols).map(j => toSDenseVector(W(::, j)))
-
-    val Wt = new RowMatrix(sc.makeRDD(Wcols), m, n)
-
-//    val genotypes = new IndexedRowMatrix(sc.makeRDD(IndexedSeq[IndexedRow]()), 0, n)
-//    val variants = Array[Variant]()
-//    val lmmResult = LMM(Wt, variants, genotypes, C0, y0, None, useREML = false)
-
-
-    val lmmResult = LMM(Wt, G, C0, y0, None, useREML = false)
+    val lmmResult = LMM(vdsKernel, vdsAssoc, C, y, None, useML = true)
     val model = lmmResult.diagLMM
 
     println()
@@ -302,11 +289,10 @@ class LinearMixedModelSuite extends SparkSuite {
     println()
     println("b")
     (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ model.nullB(i) }"))
-    println(s"x = $x")
-    println(lmmResult.rdd.collect()(0))
+    println()
+    lmmResult.rdd.collect().foreach(println)
 
-//    val lmmResultR = LMM(Wt, variants, genotypes, C0, y0, None, useREML = true)
-    val lmmResultR = LMM(K, G, C0, y0, None, useREML = true)
+    val lmmResultR = LMM(vdsKernel, vdsAssoc, C, y)
     val modelR = lmmResultR.diagLMM
 
     println()
@@ -320,8 +306,8 @@ class LinearMixedModelSuite extends SparkSuite {
     println()
     println("b")
     (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ modelR.nullB(i) }"))
-    println(s"x = $x")
-    println(lmmResultR.rdd.collect()(0))
+    println()
+    lmmResult.rdd.collect().foreach(println)
   }
 
   @Test def testLowRank() {
@@ -546,15 +532,50 @@ class LinearMixedModelSuite extends SparkSuite {
   }
 
   @Test def toNormalizedGtArrayTest() {
-    val vds = LoadVCF(sc, "src/test/resources/sample.vcf")
+
+
+    val G = DenseMatrix((0,  1),
+                        (2, -1),
+                        (0,  2))
+
+    val vds = TestUtils.vdsFromMatrix(sc)(G)
     val n = vds.nSamples
+    val sqrtN = math.sqrt(n)
     val gtVects = vds.rdd.collect().flatMap{ case (v, (va, gs)) => ToNormalizedGtArray(gs, n) }.map(DenseVector(_))
 
     for (gts <- gtVects) {
       assert(math.abs(mean(gts)) < 1e-6)
-      assert(D_==(norm(gts), 1d))
+      assert(D_==(norm(gts), sqrtN))
     }
+
+    val K = ComputeRRM.withoutBlocks(vds)._1
+    val bK = ComputeRRM.withBlocks(vds)._1
+
+    TestUtils.assertEqualityMatrixDouble(K, bK)
+
+    val seed = 0
+    scala.util.Random.setSeed(seed)
+
+    val G1 = DenseMatrix.fill[Int](100,10)(scala.util.Random.nextInt(4) - 1)
+    val vds1 = TestUtils.vdsFromMatrix(sc)(G1)
+    val K1 = ComputeRRM.withoutBlocks(vds1)._1
+    val bK1 = ComputeRRM.withBlocks(vds1)._1
+
+    TestUtils.assertEqualityMatrixDouble(K1, bK1)
   }
+
+
+
+
+
+
+
+
+
+
+
+
+
 
   @Test def RRMTest() {
     val vds = LoadVCF(sc, "src/test/resources/sample.vcf")

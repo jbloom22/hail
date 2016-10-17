@@ -41,5 +41,18 @@ object TestUtils {
 
     new VariantDataset(VariantMetadata(sampleIds), rdd)
   }
-}
 
+  def assertEqualityMatrixDouble(A: Matrix[Double], B: Matrix[Double], tolerance: Double = 1e-6) {
+    assert(A.rows == B.rows)
+    assert(A.cols == B.cols)
+    var i = 0
+    var j = 0
+    while (i < A.rows) {
+      while (j < A.cols) {
+        assert(D_==(A(i, j), B(i, j), tolerance))
+        j += 1
+      }
+      i += 1
+    }
+  }
+}
