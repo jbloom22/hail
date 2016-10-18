@@ -24,7 +24,7 @@ object ToNormalizedIndexedRowMatrix {
     val n = vds.nSamples
     val variants = vds.variants.collect()
     val variantIdxBc = vds.sparkContext.broadcast(variants.index)
-    val indexedRows = vds.rdd.flatMap{ case (v, (va, gs)) => ToNormalizedGtArray(gs, n).map( a => IndexedRow(variantIdxBc.value(v), Vectors.dense(a))) }
+    val indexedRows = vds.rdd.flatMap { case (v, (va, gs)) => ToNormalizedGtArray(gs, n).map(a => IndexedRow(variantIdxBc.value(v), Vectors.dense(a))) }
     val m = indexedRows.count()
     new IndexedRowMatrix(indexedRows, m, n)
   }
@@ -64,7 +64,8 @@ class SparseGtBuilder extends Serializable {
   private val missingRowIndices = new mutable.ArrayBuilder.ofInt()
   private val rowsX = new mutable.ArrayBuilder.ofInt()
   private val valsX = new mutable.ArrayBuilder.ofDouble()
-  private var sparseLength = 0 // length of rowsX and valsX (ArrayBuilder has no length), used to track missingRowIndices
+  private var sparseLength = 0
+  // length of rowsX and valsX (ArrayBuilder has no length), used to track missingRowIndices
   private var sumX = 0
   private var nHet = 0
 
@@ -161,7 +162,7 @@ object ToSparseIndexedRowMatrix {
     val mat = vds.aggregateByVariantWithKeys[SparseGtBuilder](new SparseGtBuilder())(
       (sb, v, s, g) => sb.merge(sampleIndexBc.value(s), g),
       (sb1, sb2) => sb1.merge(sb2))
-      .flatMap{ case (v, sb) => sb.toGtSSparseVector(nVariants).map(IndexedRow(variantIdxBroadcast.value(v), _)) }
+      .flatMap { case (v, sb) => sb.toGtSSparseVector(nVariants).map(IndexedRow(variantIdxBroadcast.value(v), _)) }
 
     (variants, new IndexedRowMatrix(mat.cache(), nVariants, nSamples))
   }
@@ -176,104 +177,105 @@ object ToSparseRDD {
     vds.aggregateByVariantWithKeys[SparseGtBuilder](new SparseGtBuilder())(
       (sb, v, s, g) => sb.merge(sampleIndexBc.value(s), g),
       (sb1, sb2) => sb1.merge(sb2))
-      .flatMap { case (v, sb) => sb.toGtSSparseVector(nSamples).map((v, _)) }
+      .mapPartitions({ it =>
+        it.flatMap { case (v, sb) => sb.toGtSSparseVector(nSamples).map((v, _)) }
+      }, preservesPartitioning = true)
   }
-}
 
 
-// mean centered and variance normalized
-object ToNormalizedGtArray {
-  def apply(gs: Iterable[Genotype], nSamples: Int): Option[Array[Double]] = {
-    val (nPresent, gtSum, gtSumSq) = gs.flatMap(_.gt).foldLeft((0, 0, 0))((acc, gt) => (acc._1 + 1, acc._2 + gt, acc._3 + gt * gt))
-    val nMissing = nSamples - nPresent
-    val allHomRef = gtSum == 0
-    val allHet = gtSum == nPresent && gtSumSq == nPresent
-    val allHomVar = gtSum == 2 * nPresent
+  // mean centered and variance normalized
+  object ToNormalizedGtArray {
+    def apply(gs: Iterable[Genotype], nSamples: Int): Option[Array[Double]] = {
+      val (nPresent, gtSum, gtSumSq) = gs.flatMap(_.gt).foldLeft((0, 0, 0))((acc, gt) => (acc._1 + 1, acc._2 + gt, acc._3 + gt * gt))
+      val nMissing = nSamples - nPresent
+      val allHomRef = gtSum == 0
+      val allHet = gtSum == nPresent && gtSumSq == nPresent
+      val allHomVar = gtSum == 2 * nPresent
 
-    if (allHomRef || allHomVar || allHet)
-      None
-    else {
-      val gtMean = gtSum.toDouble / nPresent
-      val gtMeanAll = (gtSum + nMissing * gtMean) / nSamples
-      val gtMeanSqAll = (gtSumSq + nMissing * gtMean * gtMean) / nSamples
-      val gtStdDevRec = 1d / math.sqrt(gtMeanSqAll - gtMeanAll * gtMeanAll)
+      if (allHomRef || allHomVar || allHet)
+        None
+      else {
+        val gtMean = gtSum.toDouble / nPresent
+        val gtMeanAll = (gtSum + nMissing * gtMean) / nSamples
+        val gtMeanSqAll = (gtSumSq + nMissing * gtMean * gtMean) / nSamples
+        val gtStdDevRec = 1d / math.sqrt(gtMeanSqAll - gtMeanAll * gtMeanAll)
 
-      if (gtStdDevRec.isNaN())
-        println(gtSum, gtSumSq, gtMeanSqAll, gtMeanAll * gtMeanAll, gs.map(_.gt.get))
+        if (gtStdDevRec.isNaN())
+          println(gtSum, gtSumSq, gtMeanSqAll, gtMeanAll * gtMeanAll, gs.map(_.gt.get))
 
-      Some(gs.map(_.gt.map(g => (g - gtMean) * gtStdDevRec).getOrElse(0d)).toArray)
-    }
-  }
-}
-
-// FIXME: reconcile with logreg copy
-object toGtDenseMatrix {
-  def apply(gs: Iterable[Genotype]): Option[DenseMatrix[Double]] = {
-    val (nPresent, gtSum, allHet) = gs.flatMap(_.nNonRefAlleles).foldLeft((0, 0, true))((acc, gt) => (acc._1 + 1, acc._2 + gt, acc._3 && (gt == 1)))
-
-    if (gtSum == 0 || gtSum == 2 * nPresent || allHet)
-      None
-    else {
-      val gtMean = gtSum.toDouble / nPresent
-      val gtArray = gs.map(_.gt.map(_.toDouble).getOrElse(gtMean)).toArray
-      Some(new DenseMatrix(gtArray.length, 1, gtArray))
-    }
-  }
-}
-
-// FIXME: not working
-object ToRRM {
-  def apply(vds: VariantDataset): DenseMatrix[Double] = {
-    require(vds.nSamples > 0)
-
-    val N = vds.nSamples
-    val triN: Int = if (N % 2 == 0) (N / 2) * (N + 1) else N * ((N + 1) / 2)
-
-    //println(vds.rdd.count())
-
-
-    val C = vds.rdd
-      .mapPartitions { it =>
-        val A = new mutable.ArrayBuilder.ofDouble()
-        it.foreach { case (v, (va, gs)) =>
-          ToNormalizedGtArray(gs, N).foreach(A ++= _)
-        }
-        Iterator(A.result())
+        Some(gs.map(_.gt.map(g => (g - gtMean) * gtStdDevRec).getOrElse(0d)).toArray)
       }
-      .treeAggregate(DenseVector[Double](new Array[Double](N * N)))(
-        seqOp = (C, A) => {
-          if (!A.isEmpty) {
-            val UPLO = "U"
-            val TRANS = "N"
-            val K = A.length / N
-            val ALPHA = 1d
-            val LDA = N
-            val BETA = 0d
-            val LDC = N
+    }
+  }
 
-            println(N, K, A.length)
+  // FIXME: reconcile with logreg copy
+  object toGtDenseMatrix {
+    def apply(gs: Iterable[Genotype]): Option[DenseMatrix[Double]] = {
+      val (nPresent, gtSum, allHet) = gs.flatMap(_.nNonRefAlleles).foldLeft((0, 0, true))((acc, gt) => (acc._1 + 1, acc._2 + gt, acc._3 && (gt == 1)))
 
-            // http://www.netlib.org/lapack/explore-html/d1/d54/group__double__blas__level3_gae0ba56279ae3fa27c75fefbc4cc73ddf.html
-            NativeBLAS.dsyrk(UPLO, TRANS, N, K, ALPHA, A, LDA, BETA, C.data, LDC)
+      if (gtSum == 0 || gtSum == 2 * nPresent || allHet)
+        None
+      else {
+        val gtMean = gtSum.toDouble / nPresent
+        val gtArray = gs.map(_.gt.map(_.toDouble).getOrElse(gtMean)).toArray
+        Some(new DenseMatrix(gtArray.length, 1, gtArray))
+      }
+    }
+  }
+
+  // FIXME: not working
+  object ToRRM {
+    def apply(vds: VariantDataset): DenseMatrix[Double] = {
+      require(vds.nSamples > 0)
+
+      val N = vds.nSamples
+      val triN: Int = if (N % 2 == 0) (N / 2) * (N + 1) else N * ((N + 1) / 2)
+
+      //println(vds.rdd.count())
+
+
+      val C = vds.rdd
+        .mapPartitions { it =>
+          val A = new mutable.ArrayBuilder.ofDouble()
+          it.foreach { case (v, (va, gs)) =>
+            ToNormalizedGtArray(gs, N).foreach(A ++= _)
           }
-          C
-        },
-        combOp = (C1, C2) => C1 += C2
-      )
+          Iterator(A.result())
+        }
+        .treeAggregate(DenseVector[Double](new Array[Double](N * N)))(
+          seqOp = (C, A) => {
+            if (!A.isEmpty) {
+              val UPLO = "U"
+              val TRANS = "N"
+              val K = A.length / N
+              val ALPHA = 1d
+              val LDA = N
+              val BETA = 0d
+              val LDC = N
 
-    copyTriuToTril(N, new DenseMatrix[Double](N, N, C.data))
-  }
+              println(N, K, A.length)
 
-  def copyTriuToTril(n: Int, C: DenseMatrix[Double]): DenseMatrix[Double] = {
-    var i = 0
-    var j = 0
-    while (i < n) {
-      while (j < i) {
-        C(i, j) = C(j, i)
-        j += 1
-      }
-      i += 1
+              // http://www.netlib.org/lapack/explore-html/d1/d54/group__double__blas__level3_gae0ba56279ae3fa27c75fefbc4cc73ddf.html
+              NativeBLAS.dsyrk(UPLO, TRANS, N, K, ALPHA, A, LDA, BETA, C.data, LDC)
+            }
+            C
+          },
+          combOp = (C1, C2) => C1 += C2
+        )
+
+      copyTriuToTril(N, new DenseMatrix[Double](N, N, C.data))
     }
-    C
+
+    def copyTriuToTril(n: Int, C: DenseMatrix[Double]): DenseMatrix[Double] = {
+      var i = 0
+      var j = 0
+      while (i < n) {
+        while (j < i) {
+          C(i, j) = C(j, i)
+          j += 1
+        }
+        i += 1
+      }
+      C
+    }
   }
-}

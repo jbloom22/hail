@@ -133,12 +133,17 @@ object LinearMixedModelCommand extends Command {
 
     val newState = state.copy(
       vds = vds.copy(
-        rdd = vds.rdd.orderedLeftJoinDistinct(lmmreg.rdd.toOrderedRDD)
+        rdd = vds.rdd.orderedLeftJoinDistinct(lmmreg.rdd.asOrderedRDD)
           .mapValues{ case ((va, gs), optlmmstat) => (inserter(va, optlmmstat.map(_.toAnnotation)), gs) }
           .asOrderedRDD,
         vaSignature = newVAS
       )
     )
+
+
+    /// ------------------.........
+    ///   \             /
+    ///    \---LMM REG /
 
     info("lmmreg: Finished annotating variants.")
 
