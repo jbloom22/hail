@@ -2,7 +2,6 @@ package org.broadinstitute.hail.stats
 
 import breeze.linalg.{DenseMatrix, eigSym, svd}
 import org.apache.commons.math3.random.JDKRandomGenerator
-import org.apache.commons.math3.random.MersenneTwister
 import org.broadinstitute.hail.SparkSuite
 import org.testng.annotations.Test
 import org.broadinstitute.hail.utils._

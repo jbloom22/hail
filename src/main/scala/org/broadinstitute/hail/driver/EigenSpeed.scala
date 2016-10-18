@@ -1,7 +1,6 @@
 package org.broadinstitute.hail.driver
 
 import breeze.linalg.{DenseMatrix, eigSym, svd}
-import org.apache.commons.math3.random.JDKRandomGenerator
 import org.broadinstitute.hail.stats._
 import org.broadinstitute.hail.utils._
 import org.kohsuke.args4j.{Option => Args4jOption}
@@ -15,8 +14,14 @@ object EigenSpeed extends Command {
     @Args4jOption(required = false, name = "-max", aliases = Array("--maxdim"), usage = "max dim")
     var maxdim: Int = 1000
 
-    @Args4jOption(required = false, name = "-s", aliases = Array("--step"), usage = "step size")
+    @Args4jOption(required = false, name = "-step", aliases = Array("--step"), usage = "step size")
     var step: Int = 500
+
+    @Args4jOption(required = false, name = "-seed", aliases = Array("--seed"), usage = "random seed")
+    var seed: Int = 0
+
+    @Args4jOption(required = false, name = "-all", aliases = Array("--all"), usage = "flag to use all algorithms (eigSymD)")
+    var all: Boolean = false
   }
 
   def newOptions = new Options
@@ -37,27 +42,20 @@ object EigenSpeed extends Command {
       s"$ft \t $t"
     }
 
-    val seed = 0
-    val rand = new JDKRandomGenerator()
-
-    rand.setSeed(seed)
+    scala.util.Random.setSeed(options.seed)
 
     for {n <- options.mindim to options.maxdim by options.step} {
-      val W = DenseMatrix.fill[Double](n, n)(rand.nextGaussian())
+      val W = DenseMatrix.fill[Double](n, n)(scala.util.Random.nextGaussian())
       val K = W * W.t
 
-      def computeSVD() { svd(W) }
-      def computeSVDK() { svd(K) }
-      def computeEigSymD() { eigSymD(K) }
-      def computeEigSymR() { eigSymR(K) }
-      def computeEigSym() { eigSym(K) }
-
-      info(s"$n, eigSymD: ${ timeString(computeEigSymD()) }")
-      info(s"$n, eigSymD: ${ timeString(computeEigSymD()) }")
-      info(s"$n, eigSymR: ${ timeString(computeEigSymR()) }")
-      info(s"$n, svdK:    ${ timeString(computeSVDK()) }")
-      info(s"$n, svd:     ${ timeString(computeSVD()) }")
-      info(s"$n, eigSym:  ${ timeString(computeEigSym()) }")
+      info(s"$n, eigSymD: ${ timeString({ eigSymD(K) }) }")
+      info(s"$n, eigSymD: ${ timeString({ eigSymD(K) }) }")
+      if (options.all) {
+        info(s"$n, eigSymR: ${ timeString({ eigSymR(K) }) }")
+        info(s"$n, svdK:    ${ timeString({ svd(K) }) }")
+        info(s"$n, svd:     ${ timeString({ svd(W) }) }")
+        info(s"$n, eigSym:  ${ timeString({ eigSym(K) }) }")
+      }
       println()
     }
 
