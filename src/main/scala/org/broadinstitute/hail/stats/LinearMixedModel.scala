@@ -2,31 +2,46 @@ package org.broadinstitute.hail.stats
 
 import breeze.linalg._
 import breeze.numerics.sqrt
-import org.apache.spark.rdd.RDD
 import org.broadinstitute.hail.annotations._
 import org.broadinstitute.hail.expr.{TDouble, TStruct, Type}
-import org.broadinstitute.hail.methods.{ComputeRRM, ToSparseRDD}
-import org.broadinstitute.hail.variant.{Variant, VariantDataset}
+import org.broadinstitute.hail.methods.{ComputeRRM, ToGtDenseVector}
+import org.broadinstitute.hail.variant.VariantDataset
 import org.broadinstitute.hail.utils._
 
-object LMM {
-  def apply(vdsKernel: VariantDataset,
-    vdsAssoc: VariantDataset,
+object LinearMixedModel {
+  def schema: Type = TStruct(
+    ("beta", TDouble),
+    ("sigmaG2", TDouble),
+    ("chi2", TDouble),
+    ("pval", TDouble))
+
+  def apply(vds: VariantDataset,
+    kernelFiltExprVA: String,
+    pathVA: List[String],
+    completeSamples: IndexedSeq[String],
     C: DenseMatrix[Double],
     y: DenseVector[Double],
     optDelta: Option[Double] = None,
     useML: Boolean = false,
-    useBlockedMatrix: Boolean = false): LMMResult = {
+    useBlockedMatrix: Boolean = false): VariantDataset = {
 
     val n = y.length
 
+    val completeSamplesSet = completeSamples.toSet
+    val sampleMask = vds.sampleIds.map(completeSamplesSet).toArray
+
+    val (newVAS, inserter) = vds.insertVA(LinearMixedModel.schema, pathVA)
+
     info(s"lmmreg: Computing kernel for $n samples...")
+
+    val vdsKernel = vds.filterVariantsExpr(kernelFiltExprVA, keep = true).filterSamples((s, sa) => completeSamplesSet(s))
 
     val (kernel, m) =
       if (useBlockedMatrix)
         ComputeRRM.withBlocks(vdsKernel)
       else
         ComputeRRM.withoutBlocks(vdsKernel)
+
     assert(kernel.rows == n && kernel.cols == n)
 
     info(s"lmmreg: RRM computed using $m variants. Computing eigenvectors... ") // should use better Lapack method
@@ -38,7 +53,7 @@ object LMM {
 
     info("lmmreg: Largest evals: " + ((n - 1) to math.max(0, n - 10) by -1).map(S(_).formatted("%.5f")).mkString(", "))
     info("lmmreg: Smallest evals: " + (0 until math.min(n, 10)).map(S(_).formatted("%.5f")).mkString(", "))
-    info(s"lmmreg: Estimating delta using ${if (useML) "ML" else "REML"}... ")
+    info(s"lmmreg: Estimating delta using ${ if (useML) "ML" else "REML" }... ")
 
     val UtC = Ut * C
     val Uty = Ut * y
@@ -46,25 +61,26 @@ object LMM {
     val diagLMM = DiagLMM(UtC, Uty, S, optDelta, useML)
 
     val header = "rank\teval"
-    val evalString = (0 until n).map(i => s"$i\t${S(i)}").mkString("\n")
+    val evalString = (0 until n).map(i => s"$i\t${ S(i) }").mkString("\n")
     log.info(s"\nEIGENVALUES\n$header\n$evalString\n\n")
 
-    info(s"lmmreg: delta = ${diagLMM.delta}. Computing LMM statistics for each variant...")
+    info(s"lmmreg: delta = ${ diagLMM.delta }. Computing LMM statistics for each variant...")
 
-    val T = Ut(::,*) :* diagLMM.sqrtInvD
+    val T = Ut(::, *) :* diagLMM.sqrtInvD
     val Qt = qr.reduced.justQ(diagLMM.TC).t
     val QtTy = Qt * diagLMM.Ty
     val TyQtTy = (diagLMM.Ty dot diagLMM.Ty) - (QtTy dot QtTy)
 
-    val G = ToSparseRDD(vdsAssoc)
-    val sc = G.sparkContext
+    val sc = vds.sparkContext
     val TBc = sc.broadcast(T)
-
+    val sampleMaskBc = sc.broadcast(sampleMask)
     val scalerLMMBc = sc.broadcast(ScalerLMM(diagLMM.Ty, diagLMM.TyTy, Qt, QtTy, TyQtTy, diagLMM.logNullS2, useML))
 
-    val lmmResult = G.mapValues(x => scalerLMMBc.value.likelihoodRatioTest(TBc.value * x))
+    vds.mapAnnotations { case (v, va, gs) =>
+      val lmmregStat = ToGtDenseVector(gs, sampleMaskBc.value, n).map(x => scalerLMMBc.value.likelihoodRatioTest(TBc.value * x))
 
-    LMMResult(diagLMM, lmmResult)
+      inserter(va, lmmregStat)
+    }.copy(vaSignature = newVAS)
   }
 }
 
@@ -151,7 +167,7 @@ case class ScalerLMM(
   logNullS2: Double,
   useML: Boolean) {
 
-  def likelihoodRatioTest(x: Vector[Double]): LMMStat = {
+  def likelihoodRatioTest(x: Vector[Double]): Annotation = {
 
     val n = y.length
     val Qtx = Qt * x
@@ -163,20 +179,6 @@ case class ScalerLMM(
     val chi2 = n * (logNullS2 - math.log(s2))
     val p = chiSquaredTail(1, chi2)
 
-    LMMStat(b, s2, chi2, p)
+    Annotation(b, s2, chi2, p)
   }
 }
-
-object LMMStat {
-  def `type`: Type = TStruct(
-    ("beta", TDouble),
-    ("sigmaG2", TDouble),
-    ("chi2", TDouble),
-    ("pval", TDouble))
-}
-
-case class LMMStat(b: Double, s2: Double, chi2: Double, p: Double) {
-  def toAnnotation: Annotation = Annotation(b, s2, chi2, p)
-}
-
-case class LMMResult(diagLMM: DiagLMM, rdd: RDD[(Variant, LMMStat)])

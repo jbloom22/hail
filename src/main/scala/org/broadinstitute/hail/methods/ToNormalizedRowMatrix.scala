@@ -60,6 +60,7 @@ object ComputeRRM {
   }
 }
 
+// FIXME: remove row input, integrate sample mask
 class SparseGtBuilder extends Serializable {
   private val missingRowIndices = new mutable.ArrayBuilder.ofInt()
   private val rowsX = new mutable.ArrayBuilder.ofInt()
@@ -106,35 +107,13 @@ class SparseGtBuilder extends Serializable {
     this
   }
 
-  def toGtSSparseVector(nSamples: Int): Option[SparseVector[Double]] = {
-    val missingRowIndicesArray = missingRowIndices.result()
-    val nMissing = missingRowIndicesArray.size
-    val nPresent = nSamples - nMissing
-
-    // all HomRef | all Het | all HomVar || all missing
-    if (sumX == 0 || nHet == nPresent || sumX == 2 * nPresent || nPresent == 0)
-      None
-    else {
-      val rowsXArray = rowsX.result()
-      val valsXArray = valsX.result()
-      val meanX = sumX.toDouble / nPresent
-
-      missingRowIndicesArray.foreach(valsXArray(_) = meanX)
-
-      // Variant is atomic => combOp merge not called => rowsXArray is sorted (as expected by SparseVector constructor)
-      assert(rowsXArray.isIncreasing)
-
-      Some(new SSparseVector(nSamples, rowsXArray, valsXArray))
-    }
-  }
-
   def toGtSparseVector(nSamples: Int): Option[SparseVector[Double]] = {
     val missingRowIndicesArray = missingRowIndices.result()
     val nMissing = missingRowIndicesArray.size
     val nPresent = nSamples - nMissing
 
     // all HomRef | all Het | all HomVar || all missing
-    if (sumX == 0 || nHet == nPresent || sumX == 2 * nPresent || nPresent == 0)
+    if (sumX == 0 || nHet == nPresent || sumX == 2 * nPresent)
       None
     else {
       val rowsXArray = rowsX.result()
@@ -151,131 +130,122 @@ class SparseGtBuilder extends Serializable {
   }
 }
 
-object ToSparseIndexedRowMatrix {
-  def apply(vds: VariantDataset): (Array[Variant], IndexedRowMatrix) = {
-    val variants = vds.variants.collect()
-    val nVariants = variants.length
-    val nSamples = vds.nSamples
-    val variantIdxBroadcast = vds.sparkContext.broadcast(variants.index)
-    val sampleIndexBc = vds.sparkContext.broadcast(vds.sampleIds.zipWithIndex.toMap)
+// mean centered and variance normalized
+object ToNormalizedGtArray {
+  def apply(gs: Iterable[Genotype], nSamples: Int): Option[Array[Double]] = {
+    val (nPresent, gtSum, gtSumSq) = gs.flatMap(_.gt).foldLeft((0, 0, 0))((acc, gt) => (acc._1 + 1, acc._2 + gt, acc._3 + gt * gt))
+    val nMissing = nSamples - nPresent
+    val allHomRef = gtSum == 0
+    val allHet = gtSum == nPresent && gtSumSq == nPresent
+    val allHomVar = gtSum == 2 * nPresent
 
-    val mat = vds.aggregateByVariantWithKeys[SparseGtBuilder](new SparseGtBuilder())(
-      (sb, v, s, g) => sb.merge(sampleIndexBc.value(s), g),
-      (sb1, sb2) => sb1.merge(sb2))
-      .flatMap { case (v, sb) => sb.toGtSSparseVector(nVariants).map(IndexedRow(variantIdxBroadcast.value(v), _)) }
+    if (allHomRef || allHomVar || allHet)
+      None
+    else {
+      val gtMean = gtSum.toDouble / nPresent
+      val gtMeanAll = (gtSum + nMissing * gtMean) / nSamples
+      val gtMeanSqAll = (gtSumSq + nMissing * gtMean * gtMean) / nSamples
+      val gtStdDevRec = 1d / math.sqrt(gtMeanSqAll - gtMeanAll * gtMeanAll)
 
-    (variants, new IndexedRowMatrix(mat.cache(), nVariants, nSamples))
+      if (gtStdDevRec.isNaN())
+        println(gtSum, gtSumSq, gtMeanSqAll, gtMeanAll * gtMeanAll, gs.map(_.gt.get))
+
+      Some(gs.map(_.gt.map(g => (g - gtMean) * gtStdDevRec).getOrElse(0d)).toArray)
+    }
   }
 }
 
-// These methods filter out constant vectors, but their names don't indicate it
-object ToSparseRDD {
-  def apply(vds: VariantDataset): RDD[(Variant, Vector[Double])] = {
-    val nSamples = vds.nSamples
-    val sampleIndexBc = vds.sparkContext.broadcast(vds.sampleIds.zipWithIndex.toMap)
+object ToGtDenseVector {
+  def apply(gs: Iterable[Genotype], sampleMask: Array[Boolean], nSamples: Int): Option[DenseVector[Double]] = {
+    val gtArray = new Array[Double](nSamples)
+    val missingRowIndices = new mutable.ArrayBuilder.ofInt()
+    var row = 0
+    var gtSum = 0
 
-    vds.aggregateByVariantWithKeys[SparseGtBuilder](new SparseGtBuilder())(
-      (sb, v, s, g) => sb.merge(sampleIndexBc.value(s), g),
-      (sb1, sb2) => sb1.merge(sb2))
-      .mapPartitions({ it =>
-        it.flatMap { case (v, sb) => sb.toGtSSparseVector(nSamples).map((v, _)) }
-      }, preservesPartitioning = true)
-  }
-
-
-  // mean centered and variance normalized
-  object ToNormalizedGtArray {
-    def apply(gs: Iterable[Genotype], nSamples: Int): Option[Array[Double]] = {
-      val (nPresent, gtSum, gtSumSq) = gs.flatMap(_.gt).foldLeft((0, 0, 0))((acc, gt) => (acc._1 + 1, acc._2 + gt, acc._3 + gt * gt))
-      val nMissing = nSamples - nPresent
-      val allHomRef = gtSum == 0
-      val allHet = gtSum == nPresent && gtSumSq == nPresent
-      val allHomVar = gtSum == 2 * nPresent
-
-      if (allHomRef || allHomVar || allHet)
-        None
-      else {
-        val gtMean = gtSum.toDouble / nPresent
-        val gtMeanAll = (gtSum + nMissing * gtMean) / nSamples
-        val gtMeanSqAll = (gtSumSq + nMissing * gtMean * gtMean) / nSamples
-        val gtStdDevRec = 1d / math.sqrt(gtMeanSqAll - gtMeanAll * gtMeanAll)
-
-        if (gtStdDevRec.isNaN())
-          println(gtSum, gtSumSq, gtMeanSqAll, gtMeanAll * gtMeanAll, gs.map(_.gt.get))
-
-        Some(gs.map(_.gt.map(g => (g - gtMean) * gtStdDevRec).getOrElse(0d)).toArray)
+    gs.iterator.zipWithIndex.foreach { case (g, i) =>
+      if (sampleMask(i)) {
+        val gt = g.unboxedGT
+        if (gt != -1) {
+          gtArray(row)
+          gtSum += gt
+        } else
+          missingRowIndices += row
+        row += 1
       }
     }
-  }
 
-  // FIXME: reconcile with logreg copy
-  object toGtDenseMatrix {
-    def apply(gs: Iterable[Genotype]): Option[DenseMatrix[Double]] = {
-      val (nPresent, gtSum, allHet) = gs.flatMap(_.nNonRefAlleles).foldLeft((0, 0, true))((acc, gt) => (acc._1 + 1, acc._2 + gt, acc._3 && (gt == 1)))
+    val missingRowIndicesArray = missingRowIndices.result()
+    val nPresent = nSamples - missingRowIndicesArray.length
+    val allHet =
+      if (gtSum != nPresent)
+        false
+      else
+        gtArray.forall(_ == 1d)
 
-      if (gtSum == 0 || gtSum == 2 * nPresent || allHet)
-        None
-      else {
-        val gtMean = gtSum.toDouble / nPresent
-        val gtArray = gs.map(_.gt.map(_.toDouble).getOrElse(gtMean)).toArray
-        Some(new DenseMatrix(gtArray.length, 1, gtArray))
-      }
+    if (gtSum == 0 || gtSum == 2 * nPresent || allHet)
+      None
+    else {
+      val gtMean = gtSum.toDouble / nPresent
+      missingRowIndicesArray.foreach(gtArray(_) = gtMean)
+
+      Some(new DenseVector(gtArray))
     }
   }
+}
 
-  // FIXME: not working
-  object ToRRM {
-    def apply(vds: VariantDataset): DenseMatrix[Double] = {
-      require(vds.nSamples > 0)
+// FIXME: not working
+object ToRRM {
+  def apply(vds: VariantDataset): DenseMatrix[Double] = {
+    require(vds.nSamples > 0)
 
-      val N = vds.nSamples
-      val triN: Int = if (N % 2 == 0) (N / 2) * (N + 1) else N * ((N + 1) / 2)
+    val N = vds.nSamples
+    val triN: Int = if (N % 2 == 0) (N / 2) * (N + 1) else N * ((N + 1) / 2)
 
-      //println(vds.rdd.count())
+    //println(vds.rdd.count())
 
 
-      val C = vds.rdd
-        .mapPartitions { it =>
-          val A = new mutable.ArrayBuilder.ofDouble()
-          it.foreach { case (v, (va, gs)) =>
-            ToNormalizedGtArray(gs, N).foreach(A ++= _)
+    val C = vds.rdd
+      .mapPartitions { it =>
+        val A = new mutable.ArrayBuilder.ofDouble()
+        it.foreach { case (v, (va, gs)) =>
+          ToNormalizedGtArray(gs, N).foreach(A ++= _)
+        }
+        Iterator(A.result())
+      }
+      .treeAggregate(DenseVector[Double](new Array[Double](N * N)))(
+        seqOp = (C, A) => {
+          if (!A.isEmpty) {
+            val UPLO = "U"
+            val TRANS = "N"
+            val K = A.length / N
+            val ALPHA = 1d
+            val LDA = N
+            val BETA = 0d
+            val LDC = N
+
+            println(N, K, A.length)
+
+            // http://www.netlib.org/lapack/explore-html/d1/d54/group__double__blas__level3_gae0ba56279ae3fa27c75fefbc4cc73ddf.html
+            NativeBLAS.dsyrk(UPLO, TRANS, N, K, ALPHA, A, LDA, BETA, C.data, LDC)
           }
-          Iterator(A.result())
-        }
-        .treeAggregate(DenseVector[Double](new Array[Double](N * N)))(
-          seqOp = (C, A) => {
-            if (!A.isEmpty) {
-              val UPLO = "U"
-              val TRANS = "N"
-              val K = A.length / N
-              val ALPHA = 1d
-              val LDA = N
-              val BETA = 0d
-              val LDC = N
+          C
+        },
+        combOp = (C1, C2) => C1 += C2
+      )
 
-              println(N, K, A.length)
-
-              // http://www.netlib.org/lapack/explore-html/d1/d54/group__double__blas__level3_gae0ba56279ae3fa27c75fefbc4cc73ddf.html
-              NativeBLAS.dsyrk(UPLO, TRANS, N, K, ALPHA, A, LDA, BETA, C.data, LDC)
-            }
-            C
-          },
-          combOp = (C1, C2) => C1 += C2
-        )
-
-      copyTriuToTril(N, new DenseMatrix[Double](N, N, C.data))
-    }
-
-    def copyTriuToTril(n: Int, C: DenseMatrix[Double]): DenseMatrix[Double] = {
-      var i = 0
-      var j = 0
-      while (i < n) {
-        while (j < i) {
-          C(i, j) = C(j, i)
-          j += 1
-        }
-        i += 1
-      }
-      C
-    }
+    copyTriuToTril(N, new DenseMatrix[Double](N, N, C.data))
   }
+
+  def copyTriuToTril(n: Int, C: DenseMatrix[Double]): DenseMatrix[Double] = {
+    var i = 0
+    var j = 0
+    while (i < n) {
+      while (j < i) {
+        C(i, j) = C(j, i)
+        j += 1
+      }
+      i += 1
+    }
+    C
+  }
+}

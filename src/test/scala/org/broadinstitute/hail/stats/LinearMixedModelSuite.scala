@@ -132,7 +132,7 @@ class LinearMixedModelSuite extends SparkSuite {
     println(y0.t * inv(K + delta * DenseMatrix.eye[Double](n)) * y0)
     println(y0 dot (y0 :/ D)) // NOT THE SAME
 
-    val resultsTrick: Map[Int, LMMStat] = (0 until m).map { v =>
+    val resultsTrick: Map[Int, (Double, Double, Double, Double)] = (0 until m).map { v =>
       val x0 = G(::, v)
       val Utx0 = Ut * x0
       val dUtx0 = Utx0 :/ sqrtD
@@ -146,7 +146,7 @@ class LinearMixedModelSuite extends SparkSuite {
       val chi2 = n * (model.logNullS2 - math.log(s2))
       val p = chiSquaredTail(1, chi2)
 
-      (v, LMMStat(b, s2, chi2, p))
+      (v, (b, s2, chi2, p))
     }.toMap
 
     println()
@@ -244,71 +244,71 @@ class LinearMixedModelSuite extends SparkSuite {
     (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ modelR.nullB(i) }"))
   }
 
-  @Test def genAndFitLMMTestDist() {
-
-    val seed = 1
-    scala.util.Random.setSeed(seed)
-
-    val n = 1000 // even
-    assert(n % 4 == 0)
-    val m = 1000
-    val c = 5
-    val b = DenseVector(2.0, 1.0, 0.0, -1.0, -2.0) // length is c
-    val sigmaGSq = 10d
-    val delta = 0.1d
-
-    val C = DenseMatrix.fill[Double](n, c)(scala.util.Random.nextGaussian())
-
-    val W1 = DenseMatrix.fill[Int](n / 4, m)(scala.util.Random.nextInt(2))
-    val W2 = DenseMatrix.fill[Int](n / 2, m)(scala.util.Random.nextInt(2) * 2)
-    val W3 = DenseMatrix.fill[Int](n / 4, m)(scala.util.Random.nextInt(2) + 1)
-    val W = DenseMatrix.vertcat(W1, W2, W3)
-
-    val vdsKernel = TestUtils.vdsFromMatrix(sc)(W)
-    val K = ComputeRRM.withoutBlocks(vdsKernel)._1
-    // val K = ComputeRRM.withBlocks(vdsKernel)._1
-
-    val V = sigmaGSq * (K + delta * DenseMatrix.eye[Double](n))
-    val y = C * b + (cholesky(V) * DenseVector.fill[Double](n)(scala.util.Random.nextGaussian()))
-
-    val M = 5
-    val G = DenseMatrix.fill[Int](n,M)(scala.util.Random.nextInt(3))
-    val vdsAssoc = TestUtils.vdsFromMatrix(sc)(G)
-
-    val lmmResult = LMM(vdsKernel, vdsAssoc, C, y, None, useML = true)
-    val model = lmmResult.diagLMM
-
-    println()
-    println("ML delta:")
-    println(delta)
-    println(model.delta)
-    println()
-    println("s2:")
-    println(sigmaGSq)
-    println(model.nullS2)
-    println()
-    println("b")
-    (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ model.nullB(i) }"))
-    println()
-    lmmResult.rdd.collect().foreach(println)
-
-    val lmmResultR = LMM(vdsKernel, vdsAssoc, C, y)
-    val modelR = lmmResultR.diagLMM
-
-    println()
-    println("REML delta:")
-    println(delta)
-    println(modelR.delta)
-    println()
-    println("s2:")
-    println(sigmaGSq)
-    println(modelR.nullS2)
-    println()
-    println("b")
-    (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ modelR.nullB(i) }"))
-    println()
-    lmmResult.rdd.collect().foreach(println)
-  }
+//  @Test def genAndFitLMMTestDist() {
+//
+//    val seed = 1
+//    scala.util.Random.setSeed(seed)
+//
+//    val n = 1000 // even
+//    assert(n % 4 == 0)
+//    val m = 1000
+//    val c = 5
+//    val b = DenseVector(2.0, 1.0, 0.0, -1.0, -2.0) // length is c
+//    val sigmaGSq = 10d
+//    val delta = 0.1d
+//
+//    val C = DenseMatrix.fill[Double](n, c)(scala.util.Random.nextGaussian())
+//
+//    val W1 = DenseMatrix.fill[Int](n / 4, m)(scala.util.Random.nextInt(2))
+//    val W2 = DenseMatrix.fill[Int](n / 2, m)(scala.util.Random.nextInt(2) * 2)
+//    val W3 = DenseMatrix.fill[Int](n / 4, m)(scala.util.Random.nextInt(2) + 1)
+//    val W = DenseMatrix.vertcat(W1, W2, W3)
+//
+//    val vdsKernel = TestUtils.vdsFromMatrix(sc)(W)
+//    val K = ComputeRRM.withoutBlocks(vdsKernel)._1
+//    // val K = ComputeRRM.withBlocks(vdsKernel)._1
+//
+//    val V = sigmaGSq * (K + delta * DenseMatrix.eye[Double](n))
+//    val y = C * b + (cholesky(V) * DenseVector.fill[Double](n)(scala.util.Random.nextGaussian()))
+//
+//    val M = 5
+//    val G = DenseMatrix.fill[Int](n,M)(scala.util.Random.nextInt(3))
+//    val vdsAssoc = TestUtils.vdsFromMatrix(sc)(G)
+//
+//    val lmmResult = LinearMixedModel(vdsKernel, vdsAssoc, C, y, None, useML = true)
+//    val model = lmmResult.diagLMM
+//
+//    println()
+//    println("ML delta:")
+//    println(delta)
+//    println(model.delta)
+//    println()
+//    println("s2:")
+//    println(sigmaGSq)
+//    println(model.nullS2)
+//    println()
+//    println("b")
+//    (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ model.nullB(i) }"))
+//    println()
+//    lmmResult.rdd.collect().foreach(println)
+//
+//    val lmmResultR = LinearMixedModel(vdsKernel, vdsAssoc, C, y)
+//    val modelR = lmmResultR.diagLMM
+//
+//    println()
+//    println("REML delta:")
+//    println(delta)
+//    println(modelR.delta)
+//    println()
+//    println("s2:")
+//    println(sigmaGSq)
+//    println(modelR.nullS2)
+//    println()
+//    println("b")
+//    (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ modelR.nullB(i) }"))
+//    println()
+//    lmmResult.rdd.collect().foreach(println)
+//  }
 
   @Test def testLowRank() {
     val seed = 1

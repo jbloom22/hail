@@ -3,7 +3,7 @@ package org.broadinstitute.hail.driver
 import breeze.linalg._
 import org.broadinstitute.hail.annotations.Annotation
 import org.broadinstitute.hail.expr._
-import org.broadinstitute.hail.stats.{LMM, LMMStat}
+import org.broadinstitute.hail.stats.LinearMixedModel
 import org.broadinstitute.hail.utils._
 import org.kohsuke.args4j.{Option => Args4jOption}
 
@@ -23,8 +23,8 @@ object LinearMixedModelCommand extends Command {
     @Args4jOption(required = true, name = "-k", aliases = Array("--kernelfilterexpr"), usage = "Variant filter expression for kernel")
     var kernelFiltExprVA: String = _
 
-    @Args4jOption(required = false, name = "-a", aliases = Array("--assocfilterexpr"), usage = "Variant filter expression for association")
-    var assocFiltExprVA: String = _
+//    @Args4jOption(required = false, name = "-a", aliases = Array("--assocfilterexpr"), usage = "Variant filter expression for association")
+//    var assocFiltExprVA: String = _
 
     @Args4jOption(required = false, name = "--ml", aliases = Array("--useml"), usage = "Use ML instead of REML to fit delta")
     var useML: Boolean = false
@@ -101,8 +101,6 @@ object LinearMixedModelCommand extends Command {
           majorStride = k,
           isTranspose = true))
 
-    val completeSampleSet = completeSamples.toSet
-
     val n = y.size
     val d = n - k - 2
 
@@ -116,30 +114,17 @@ object LinearMixedModelCommand extends Command {
       case None => DenseMatrix.ones[Double](n, 1)
     }
 
-    val vdsForCompleteSamples = vds.filterSamples((s, sa) => completeSampleSet(s))
-    val vdsKernel = vdsForCompleteSamples.filterVariantsExpr(options.kernelFiltExprVA, keep = true)
-    val vdsAssoc = Option(options.assocFiltExprVA)
-      .map(expr => vdsForCompleteSamples.filterVariantsExpr(expr, keep = true))
-      .getOrElse(vdsForCompleteSamples)
+//    val vdsAssoc = Option(options.assocFiltExprVA)
+//      .map(expr => vdsForCompleteSamples.filterVariantsExpr(expr, keep = true))
+//      .getOrElse(vdsForCompleteSamples)
 
     val optDelta = Option(options.delta).map(_.doubleValue())
     optDelta.foreach(delta =>
       if (delta <= 0d)
           fatal(s"delta must be positive, got ${ delta }"))
 
-    val lmmreg = LMM(vdsKernel, vdsAssoc, C, y, optDelta, options.useML, options.useBlockedMatrix)
+    val newState = state.copy(vds = LinearMixedModel(vds, options.kernelFiltExprVA, pathVA, completeSamples, C, y, optDelta, options.useML, options.useBlockedMatrix))
 
-    val (newVAS, inserter) = vdsForCompleteSamples.insertVA(LMMStat.`type`, pathVA)
-
-    val newState = state.copy(
-      vds = vds.copy(
-        rdd = vds.rdd.orderedLeftJoinDistinct(lmmreg.rdd.asOrderedRDD)
-          .mapValues{ case ((va, gs), optlmmstat) => (inserter(va, optlmmstat.map(_.toAnnotation)), gs) }
-          .asOrderedRDD,
-        vaSignature = newVAS
-      )
-    )
-    
     info("lmmreg: Finished annotating variants.")
 
     newState
