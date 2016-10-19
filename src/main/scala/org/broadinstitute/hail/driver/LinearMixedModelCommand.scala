@@ -20,13 +20,13 @@ object LinearMixedModelCommand extends Command {
     @Args4jOption(required = false, name = "-c", aliases = Array("--covariates"), usage = "Covariate sample annotations, comma-separated")
     var covSA: String = ""
 
-    @Args4jOption(required = true, name = "-kfe", aliases = Array("--kernelfilterexpr"), usage = "Variant filter expression for kernel")
+    @Args4jOption(required = true, name = "-k", aliases = Array("--kernelfilterexpr"), usage = "Variant filter expression for kernel")
     var kernelFiltExprVA: String = _
 
-    @Args4jOption(required = false, name = "-afe", aliases = Array("--assocfilterexpr"), usage = "Variant filter expression for association")
+    @Args4jOption(required = false, name = "-a", aliases = Array("--assocfilterexpr"), usage = "Variant filter expression for association")
     var assocFiltExprVA: String = _
 
-    @Args4jOption(required = false, name = "-ml", aliases = Array("--useml"), usage = "Use ML instead of REML to fit delta")
+    @Args4jOption(required = false, name = "--ml", aliases = Array("--useml"), usage = "Use ML instead of REML to fit delta")
     var useML: Boolean = false
 
     @Args4jOption(required = false, name = "-b", aliases = Array("--block"), usage = "Use BlockedMatrix to compute kernel")
@@ -139,12 +139,7 @@ object LinearMixedModelCommand extends Command {
         vaSignature = newVAS
       )
     )
-
-
-    /// ------------------.........
-    ///   \             /
-    ///    \---LMM REG /
-
+    
     info("lmmreg: Finished annotating variants.")
 
     newState
