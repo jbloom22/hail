@@ -55,4 +55,13 @@ object TestUtils {
       i += 1
     }
   }
+
+  def assertEqualityVectorDouble(A: breeze.linalg.Vector[Double], B: breeze.linalg.Vector[Double], tolerance: Double = 1e-6) {
+    assert(A.size == B.size)
+    var i = 0
+    while (i < A.size) {
+      assert(D_==(A(i), B(i), tolerance))
+      i += 1
+    }
+  }
 }

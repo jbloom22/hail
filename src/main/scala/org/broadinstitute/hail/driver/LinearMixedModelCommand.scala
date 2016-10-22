@@ -29,6 +29,9 @@ object LinearMixedModelCommand extends Command {
     @Args4jOption(required = false, name = "--ml", aliases = Array("--useml"), usage = "Use ML instead of REML to fit delta")
     var useML: Boolean = false
 
+    @Args4jOption(required = false, name = "-s", aliases = Array("--sparsitythreshold"), usage = "Use dense gt vector above this maf threshold")
+    var sparsityThreshold: Double = 1d
+
     @Args4jOption(required = false, name = "-b", aliases = Array("--block"), usage = "Use BlockedMatrix to compute kernel")
     var useBlockedMatrix: Boolean = false
 
@@ -123,7 +126,7 @@ object LinearMixedModelCommand extends Command {
       if (delta <= 0d)
           fatal(s"delta must be positive, got ${ delta }"))
 
-    val newState = state.copy(vds = LinearMixedModel(vds, options.kernelFiltExprVA, pathVA, completeSamples, C, y, optDelta, options.useML, options.useBlockedMatrix))
+    val newState = state.copy(vds = LinearMixedModel(vds, options.kernelFiltExprVA, pathVA, completeSamples, C, y, options.sparsityThreshold, optDelta, options.useML, options.useBlockedMatrix))
 
     info("lmmreg: Finished annotating variants.")
 

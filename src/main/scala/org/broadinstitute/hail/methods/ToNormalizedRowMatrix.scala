@@ -60,73 +60,178 @@ object ComputeRRM {
   }
 }
 
-// FIXME: remove row input, integrate sample mask
 class SparseGtBuilder extends Serializable {
   private val missingRowIndices = new mutable.ArrayBuilder.ofInt()
   private val rowsX = new mutable.ArrayBuilder.ofInt()
   private val valsX = new mutable.ArrayBuilder.ofDouble()
+  private var row = 0
   private var sparseLength = 0
   // length of rowsX and valsX (ArrayBuilder has no length), used to track missingRowIndices
   private var sumX = 0
-  private var nHet = 0
 
-  def merge(row: Int, g: Genotype): SparseGtBuilder = {
-    g.gt match {
-      case Some(0) =>
-      case Some(1) =>
+  def merge(g: Genotype): SparseGtBuilder = {
+    (g.unboxedGT: @unchecked) match {
+      case 0 =>
+      case 1 =>
         rowsX += row
         valsX += 1d
         sparseLength += 1
         sumX += 1
-        nHet += 1
-      case Some(2) =>
+      case 2 =>
         rowsX += row
         valsX += 2d
         sparseLength += 1
         sumX += 2
-      case None =>
+      case -1 =>
         missingRowIndices += sparseLength
         rowsX += row
         valsX += 0d // placeholder for meanX
         sparseLength += 1
-      case _ => throw new IllegalArgumentException("Genotype value " + g.gt.get + " must be 0, 1, or 2.")
     }
+    row += 1
 
     this
   }
 
-  // variant is atomic => combOp merge not called
-  def merge(that: SparseGtBuilder): SparseGtBuilder = {
-    missingRowIndices ++= that.missingRowIndices.result().map(_ + sparseLength)
-    rowsX ++= that.rowsX.result()
-    valsX ++= that.valsX.result()
-    sparseLength += that.sparseLength
-    sumX += that.sumX
-    nHet += that.nHet
-
-    this
-  }
-
-  def toGtSparseVector(nSamples: Int): Option[SparseVector[Double]] = {
+  def toSparseGtVector(nSamples: Int): (Option[SparseVector[Double]], Double) = {
     val missingRowIndicesArray = missingRowIndices.result()
     val nMissing = missingRowIndicesArray.size
     val nPresent = nSamples - nMissing
+    val rowsXArray = rowsX.result()
+    val valsXArray = valsX.result()
 
-    // all HomRef | all Het | all HomVar || all missing
-    if (sumX == 0 || nHet == nPresent || sumX == 2 * nPresent)
-      None
+    val allHet =
+      if (sumX != nPresent)
+        false
+      else
+        valsXArray.forall(_ == 1d)
+
+    if (sumX == 0 || sumX == 2 * nPresent || allHet)
+      (None, Double.NaN)
     else {
-      val rowsXArray = rowsX.result()
-      val valsXArray = valsX.result()
       val meanX = sumX.toDouble / nPresent
 
       missingRowIndicesArray.foreach(valsXArray(_) = meanX)
 
-      // Variant is atomic => combOp merge not called => rowsXArray is sorted (as expected by SparseVector constructor)
-      assert(rowsXArray.isIncreasing)
+      // assert(rowsXArray.isIncreasing)
 
-      Some(new SparseVector(rowsXArray, valsXArray, nSamples))
+      (Some(new SparseVector(rowsXArray, valsXArray, nSamples)), meanX)
     }
+  }
+}
+
+class SparseIndexGtBuilder extends Serializable {
+  private val hetIndices = new mutable.ArrayBuilder.ofInt()
+  private val homVarIndices = new mutable.ArrayBuilder.ofInt()
+  private val missingIndices = new mutable.ArrayBuilder.ofInt()
+  private var row = 0
+
+  def merge(g: Genotype): SparseIndexGtBuilder = {
+    (g.unboxedGT: @unchecked) match {
+      case 0 =>
+      case 1 =>
+        hetIndices += row
+      case 2 =>
+        homVarIndices += row
+      case -1 =>
+        missingIndices += row
+    }
+    row += 1
+
+    this
+  }
+
+  def toGtIndexArrays(n: Int): SparseIndexGtArrays =
+    SparseIndexGtArrays(n, hetIndices.result(), homVarIndices.result(), missingIndices.result())
+}
+
+case class SparseIndexGtArrays(n: Int, hetIndices: Array[Int], homVarIndices: Array[Int], missingIndices: Array[Int]) {
+  // FIXME: need to enforce disjointness
+
+  def mean = {
+    require(isNonConstant) // FIXME: return 0 if constant?
+    val nPresent = n - missingIndices.size
+    if (nPresent == 0) Double.NaN else (hetIndices.size + 2 * homVarIndices.size) / nPresent.toDouble
+  }
+
+  val isNonConstant: Boolean = {
+    val nHomRef = n - missingIndices.size - hetIndices.size - homVarIndices.size
+
+    (nHomRef > 0 && hetIndices.size > 0) ||
+      (nHomRef > 0 && homVarIndices.size > 0) ||
+      (hetIndices.size > 0 && homVarIndices.size > 0)
+  }
+
+  def toGtDenseVector: DenseVector[Double] = {
+    val data = Array.ofDim[Double](n)
+
+    hetIndices.foreach(data(_) = 1)
+    homVarIndices.foreach(data(_) = 2)
+    missingIndices.foreach(data(_) = mean)
+
+    DenseVector(data)
+  }
+}
+
+
+// assumes column major
+object DM_SIA_Eq_DV {
+  def apply(dm: DenseMatrix[Double], sia: SparseIndexGtArrays): DenseVector[Double] = {
+    // FIXME: relax these requirements
+    require(dm.cols == sia.n)
+    require(dm.majorStride == dm.rows)
+    require(dm.offset == 0)
+    require(!dm.isTranspose)
+
+    val cols = dm.cols
+    val rows = dm.rows
+    val data = dm.data
+
+    val res = Array.ofDim[Double](rows)
+
+    var i = 0
+    var j = 0
+    var offset = 0
+
+    while (j < sia.missingIndices.size) {
+      offset = rows * sia.missingIndices(j)
+      i = 0
+      while (i < rows) {
+        res(i) += data(offset + i)
+        i += 1
+      }
+      j += 1
+    }
+
+    i = 0
+    while (i < rows) {
+      res(i) *= sia.mean
+      i += 1
+    }
+
+    j = 0
+    while (j < sia.hetIndices.size) {
+      offset = rows * sia.hetIndices(j)
+      i = 0
+      while (i < rows) {
+        res(i) += data(offset + i)
+        i += 1
+      }
+      j += 1
+    }
+
+    j = 0
+    while (j < sia.homVarIndices.size) {
+      offset = rows * sia.homVarIndices(j)
+      i = 0
+      while (i < rows) {
+        res(i) += 2 * data(offset + i)
+        i += 1
+      }
+      j += 1
+    }
+
+    DenseVector(res)
   }
 }
 

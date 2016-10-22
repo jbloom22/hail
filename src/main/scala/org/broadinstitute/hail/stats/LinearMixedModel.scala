@@ -4,7 +4,7 @@ import breeze.linalg._
 import breeze.numerics.sqrt
 import org.broadinstitute.hail.annotations._
 import org.broadinstitute.hail.expr.{TDouble, TStruct, Type}
-import org.broadinstitute.hail.methods.{ComputeRRM, ToGtDenseVector}
+import org.broadinstitute.hail.methods.{ComputeRRM, DM_SIA_Eq_DV, SparseGtBuilder, SparseIndexGtBuilder}
 import org.broadinstitute.hail.variant.VariantDataset
 import org.broadinstitute.hail.utils._
 
@@ -21,6 +21,7 @@ object LinearMixedModel {
     completeSamples: IndexedSeq[String],
     C: DenseMatrix[Double],
     y: DenseVector[Double],
+    sparsityThreshold: Double,
     optDelta: Option[Double] = None,
     useML: Boolean = false,
     useBlockedMatrix: Boolean = false): VariantDataset = {
@@ -30,9 +31,9 @@ object LinearMixedModel {
     val completeSamplesSet = completeSamples.toSet
     val sampleMask = vds.sampleIds.map(completeSamplesSet).toArray
 
-    val (newVAS, inserter) = vds.insertVA(LinearMixedModel.schema, pathVA)
-
     info(s"lmmreg: Computing kernel for $n samples...")
+
+    // FIXME: use vds.cache() here?
 
     val vdsKernel = vds.filterVariantsExpr(kernelFiltExprVA, keep = true).filterSamples((s, sa) => completeSamplesSet(s))
 
@@ -66,7 +67,7 @@ object LinearMixedModel {
 
     info(s"lmmreg: delta = ${ diagLMM.delta }. Computing LMM statistics for each variant...")
 
-    val T = Ut(::, *) :* diagLMM.sqrtInvD
+    val T = (Ut(::, *) :* diagLMM.sqrtInvD)
     val Qt = qr.reduced.justQ(diagLMM.TC).t
     val QtTy = Qt * diagLMM.Ty
     val TyQtTy = (diagLMM.Ty dot diagLMM.Ty) - (QtTy dot QtTy)
@@ -76,8 +77,36 @@ object LinearMixedModel {
     val sampleMaskBc = sc.broadcast(sampleMask)
     val scalerLMMBc = sc.broadcast(ScalerLMM(diagLMM.Ty, diagLMM.TyTy, Qt, QtTy, TyQtTy, diagLMM.logNullS2, useML))
 
+    val (newVAS, inserter) = vds.insertVA(LinearMixedModel.schema, pathVA)
+
     vds.mapAnnotations { case (v, va, gs) =>
-      val lmmregStat = ToGtDenseVector(gs, sampleMaskBc.value, n).map(x => scalerLMMBc.value.likelihoodRatioTest(TBc.value * x))
+//      val (xSparse, xMean) = {
+//        val sb = new SparseGtBuilder()
+//        gs.iterator.zipWithIndex.foreach { case (g, i) => if (sampleMaskBc.value(i)) sb.merge(g) }
+//        sb.toSparseGtVector(n)
+//      }
+//
+//      // FIXME: handle None better
+//      val xOpt =
+//        if (xMean <= sparsityThreshold)
+//          xSparse
+//        else
+//          xSparse.map(_.toDenseVector)
+
+      val sb = new SparseIndexGtBuilder()
+      gs.iterator.zipWithIndex.foreach { case (g, i) => if (sampleMaskBc.value(i)) sb.merge(g) }
+      val sia = sb.toGtIndexArrays(n)
+
+      val Tx =
+        if (sia.isNonConstant) {
+          if (sia.mean < sparsityThreshold)
+            Some(DM_SIA_Eq_DV(TBc.value, sia))
+          else
+            Some(TBc.value * sia.toGtDenseVector)
+        } else
+          None
+
+      val lmmregStat = Tx.map(scalerLMMBc.value.likelihoodRatioTest)
 
       inserter(va, lmmregStat)
     }.copy(vaSignature = newVAS)
