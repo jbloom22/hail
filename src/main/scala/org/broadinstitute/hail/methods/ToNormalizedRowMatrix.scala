@@ -146,13 +146,7 @@ class SparseIndexGtBuilder extends Serializable {
 }
 
 case class SparseIndexGtArrays(n: Int, hetIndices: Array[Int], homVarIndices: Array[Int], missingIndices: Array[Int]) {
-  // FIXME: need to enforce disjointness
-
-  def mean = {
-    require(isNonConstant) // FIXME: return 0 if constant?
-    val nPresent = n - missingIndices.size
-    if (nPresent == 0) Double.NaN else (hetIndices.size + 2 * homVarIndices.size) / nPresent.toDouble
-  }
+  // FIXME: enforce disjointness?
 
   val isNonConstant: Boolean = {
     val nHomRef = n - missingIndices.size - hetIndices.size - homVarIndices.size
@@ -160,6 +154,13 @@ case class SparseIndexGtArrays(n: Int, hetIndices: Array[Int], homVarIndices: Ar
     (nHomRef > 0 && hetIndices.size > 0) ||
       (nHomRef > 0 && homVarIndices.size > 0) ||
       (hetIndices.size > 0 && homVarIndices.size > 0)
+  }
+
+  // FIXME:
+  val mean = {
+    // require(isNonConstant)
+    val nPresent = n - missingIndices.size
+    if (nPresent == 0) 0d else (hetIndices.size + 2 * homVarIndices.size) / nPresent.toDouble
   }
 
   def toGtDenseVector: DenseVector[Double] = {

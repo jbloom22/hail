@@ -80,33 +80,35 @@ object LinearMixedModel {
     val (newVAS, inserter) = vds.insertVA(LinearMixedModel.schema, pathVA)
 
     vds.mapAnnotations { case (v, va, gs) =>
-//      val (xSparse, xMean) = {
-//        val sb = new SparseGtBuilder()
-//        gs.iterator.zipWithIndex.foreach { case (g, i) => if (sampleMaskBc.value(i)) sb.merge(g) }
-//        sb.toSparseGtVector(n)
-//      }
+      val (xSparse, xMean) = {
+        val sb = new SparseGtBuilder()
+        gs.iterator.zipWithIndex.foreach { case (g, i) => if (sampleMaskBc.value(i)) sb.merge(g) }
+        sb.toSparseGtVector(n)
+      }
+
+      // FIXME: handle None better
+      val xOpt =
+        if (xMean <= sparsityThreshold)
+          xSparse
+        else
+          xSparse.map(_.toDenseVector)
+
+      val lmmregStat = xOpt.map(x => scalerLMMBc.value.likelihoodRatioTest(TBc.value * x))
+
+//      val sb = new SparseIndexGtBuilder()
+//      gs.iterator.zipWithIndex.foreach { case (g, i) => if (sampleMaskBc.value(i)) sb.merge(g) }
+//      val sia = sb.toGtIndexArrays(n)
 //
-//      // FIXME: handle None better
-//      val xOpt =
-//        if (xMean <= sparsityThreshold)
-//          xSparse
-//        else
-//          xSparse.map(_.toDenseVector)
-
-      val sb = new SparseIndexGtBuilder()
-      gs.iterator.zipWithIndex.foreach { case (g, i) => if (sampleMaskBc.value(i)) sb.merge(g) }
-      val sia = sb.toGtIndexArrays(n)
-
-      val Tx =
-        if (sia.isNonConstant) {
-          if (sia.mean < sparsityThreshold)
-            Some(DM_SIA_Eq_DV(TBc.value, sia))
-          else
-            Some(TBc.value * sia.toGtDenseVector)
-        } else
-          None
-
-      val lmmregStat = Tx.map(scalerLMMBc.value.likelihoodRatioTest)
+//      val Tx =
+//        if (sia.isNonConstant) {
+//          if (sia.mean < sparsityThreshold)
+//            Some(DM_SIA_Eq_DV(TBc.value, sia))
+//          else
+//            Some(TBc.value * sia.toGtDenseVector)
+//        } else
+//          None
+//
+//      val lmmregStat = Tx.map(scalerLMMBc.value.likelihoodRatioTest)
 
       inserter(va, lmmregStat)
     }.copy(vaSignature = newVAS)
