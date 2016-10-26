@@ -67,7 +67,7 @@ object LinearMixedModel {
 
     info(s"lmmreg: delta = ${ diagLMM.delta }. Computing LMM statistics for each variant...")
 
-    val T = (Ut(::, *) :* diagLMM.sqrtInvD)
+    val T = Ut(::, *) :* diagLMM.sqrtInvD
     val Qt = qr.reduced.justQ(diagLMM.TC).t
     val QtTy = Qt * diagLMM.Ty
     val TyQtTy = (diagLMM.Ty dot diagLMM.Ty) - (QtTy dot QtTy)
@@ -80,20 +80,19 @@ object LinearMixedModel {
     val (newVAS, inserter) = vds.insertVA(LinearMixedModel.schema, pathVA)
 
     vds.mapAnnotations { case (v, va, gs) =>
-      val (xSparse, xMean) = {
+
+      val (x, isConstant, mean) = {
         val sb = new SparseGtBuilder()
         gs.iterator.zipWithIndex.foreach { case (g, i) => if (sampleMaskBc.value(i)) sb.merge(g) }
         sb.toSparseGtVector(n)
       }
 
-      // FIXME: handle None better
-      val xOpt =
-        if (xMean <= sparsityThreshold)
-          xSparse
+      val lmmregStat =
+        if (!isConstant)
+          Some(scalerLMMBc.value.likelihoodRatioTest(
+            TBc.value * (if (mean <= sparsityThreshold) x else x.toDenseVector)))
         else
-          xSparse.map(_.toDenseVector)
-
-      val lmmregStat = xOpt.map(x => scalerLMMBc.value.likelihoodRatioTest(TBc.value * x))
+         None
 
 //      val sb = new SparseIndexGtBuilder()
 //      gs.iterator.zipWithIndex.foreach { case (g, i) => if (sampleMaskBc.value(i)) sb.merge(g) }

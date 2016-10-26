@@ -93,30 +93,22 @@ class SparseGtBuilder extends Serializable {
     this
   }
 
-  def toSparseGtVector(nSamples: Int): (Option[SparseVector[Double]], Double) = {
+  def toSparseGtVector(nSamples: Int): (SparseVector[Double], Boolean, Double) = {
     val missingRowIndicesArray = missingRowIndices.result()
     val nMissing = missingRowIndicesArray.size
     val nPresent = nSamples - nMissing
     val rowsXArray = rowsX.result()
     val valsXArray = valsX.result()
 
-    val allHet =
-      if (sumX != nPresent)
-        false
-      else
-        valsXArray.forall(_ == 1d)
+    val isConstant = sumX == 0 || sumX == 2 * nPresent || (sumX == nPresent && valsXArray.forall(_ == 1d))
 
-    if (sumX == 0 || sumX == 2 * nPresent || allHet)
-      (None, Double.NaN)
-    else {
-      val meanX = sumX.toDouble / nPresent
+    val meanX = if (nPresent > 0) sumX.toDouble / nPresent else Double.NaN
 
-      missingRowIndicesArray.foreach(valsXArray(_) = meanX)
+    missingRowIndicesArray.foreach(valsXArray(_) = meanX)
 
-      // assert(rowsXArray.isIncreasing)
+    // assert(rowsXArray.isIncreasing)
 
-      (Some(new SparseVector(rowsXArray, valsXArray, nSamples)), meanX)
-    }
+    (new SparseVector(rowsXArray, valsXArray, nSamples), isConstant, meanX)
   }
 }
 
@@ -160,7 +152,7 @@ case class SparseIndexGtArrays(n: Int, hetIndices: Array[Int], homVarIndices: Ar
   val mean = {
     // require(isNonConstant)
     val nPresent = n - missingIndices.size
-    if (nPresent == 0) 0d else (hetIndices.size + 2 * homVarIndices.size) / nPresent.toDouble
+    if (nPresent == 0) Double.NaN else (hetIndices.size + 2 * homVarIndices.size) / nPresent.toDouble
   }
 
   def toGtDenseVector: DenseVector[Double] = {
