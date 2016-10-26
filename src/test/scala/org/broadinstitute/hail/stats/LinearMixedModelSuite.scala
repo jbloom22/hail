@@ -551,7 +551,7 @@ class LinearMixedModelSuite extends SparkSuite {
     val K = ComputeRRM.withoutBlocks(vds)._1
     val bK = ComputeRRM.withBlocks(vds)._1
 
-    TestUtils.assertEqualityMatrixDouble(K, bK)
+    TestUtils.assertMatrixEqualityDouble(K, bK)
 
     val seed = 0
     scala.util.Random.setSeed(seed)
@@ -561,7 +561,7 @@ class LinearMixedModelSuite extends SparkSuite {
     val K1 = ComputeRRM.withoutBlocks(vds1)._1
     val bK1 = ComputeRRM.withBlocks(vds1)._1
 
-    TestUtils.assertEqualityMatrixDouble(K1, bK1)
+    TestUtils.assertMatrixEqualityDouble(K1, bK1)
   }
 
   @Test def DM_SIA_Eq_DV_Test() {
@@ -577,10 +577,10 @@ class LinearMixedModelSuite extends SparkSuite {
 
     val sia = SparseIndexGtArrays(n, Array(0, 7), Array(2, 3, 9), Array(1, 8))
 
-    TestUtils.assertEqualityVectorDouble(DM_SIA_Eq_DV(E, sia), sia.toGtDenseVector)
-    TestUtils.assertEqualityVectorDouble(DM_SIA_Eq_DV(T, sia), T * sia.toGtDenseVector)
-    TestUtils.assertEqualityVectorDouble(DM_SIA_Eq_DV(T2, sia), T2 * sia.toGtDenseVector)
-    TestUtils.assertEqualityVectorDouble(DM_SIA_Eq_DV(T3, sia), T3 * sia.toGtDenseVector)
+    TestUtils.assertVectorEqualityDouble(DM_SIA_Eq_DV(E, sia), sia.toGtDenseVector)
+    TestUtils.assertVectorEqualityDouble(DM_SIA_Eq_DV(T, sia), T * sia.toGtDenseVector)
+    TestUtils.assertVectorEqualityDouble(DM_SIA_Eq_DV(T2, sia), T2 * sia.toGtDenseVector)
+    TestUtils.assertVectorEqualityDouble(DM_SIA_Eq_DV(T3, sia), T3 * sia.toGtDenseVector)
 
   }
 
