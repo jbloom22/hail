@@ -531,8 +531,7 @@ class LinearMixedModelSuite extends SparkSuite {
     (0 until c).foreach(i => println(s"$i: ${ b(i) }, ${ beta4(i) }"))
   }
 
-  @Test def toNormalizedGtArrayTest() {
-
+  @Test def normalizedGtArrayTest() {
 
     val G = DenseMatrix((0,  1),
                         (2, -1),

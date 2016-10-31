@@ -1,14 +1,38 @@
 package org.broadinstitute.hail.methods
 
 import breeze.linalg._
-import org.apache.spark.mllib.linalg.{Vectors, SparseVector => SSparseVector, DenseMatrix => SDenseMatrix}
+import org.apache.spark.mllib.linalg.{Vectors, DenseMatrix => SDenseMatrix}
 import org.apache.spark.mllib.linalg.distributed.{IndexedRow, IndexedRowMatrix, RowMatrix}
-import org.apache.spark.rdd.RDD
 import org.broadinstitute.hail.utils._
-import org.broadinstitute.hail.variant.{Genotype, Variant, VariantDataset}
+import org.broadinstitute.hail.variant.{Genotype, VariantDataset}
 import com.github.fommil.netlib.BLAS.{getInstance => NativeBLAS}
 
 import scala.collection.mutable
+
+// mean centered and variance normalized
+object ToNormalizedGtArray {
+  def apply(gs: Iterable[Genotype], nSamples: Int): Option[Array[Double]] = {
+    val (nPresent, gtSum, gtSumSq) = gs.flatMap(_.gt).foldLeft((0, 0, 0))((acc, gt) => (acc._1 + 1, acc._2 + gt, acc._3 + gt * gt))
+    val nMissing = nSamples - nPresent
+    val allHomRef = gtSum == 0
+    val allHet = gtSum == nPresent && gtSumSq == nPresent
+    val allHomVar = gtSum == 2 * nPresent
+
+    if (allHomRef || allHomVar || allHet)
+      None
+    else {
+      val gtMean = gtSum.toDouble / nPresent
+      val gtMeanAll = (gtSum + nMissing * gtMean) / nSamples
+      val gtMeanSqAll = (gtSumSq + nMissing * gtMean * gtMean) / nSamples
+      val gtStdDevRec = 1d / math.sqrt(gtMeanSqAll - gtMeanAll * gtMeanAll)
+
+      if (gtStdDevRec.isNaN())
+        println(gtSum, gtSumSq, gtMeanSqAll, gtMeanAll * gtMeanAll, gs.map(_.gt.get))
+
+      Some(gs.map(_.gt.map(g => (g - gtMean) * gtStdDevRec).getOrElse(0d)).toArray)
+    }
+  }
+}
 
 object ToNormalizedRowMatrix {
   def apply(vds: VariantDataset): RowMatrix = {
@@ -65,8 +89,7 @@ class SparseGtBuilder extends Serializable {
   private val rowsX = new mutable.ArrayBuilder.ofInt()
   private val valsX = new mutable.ArrayBuilder.ofDouble()
   private var row = 0
-  private var sparseLength = 0
-  // length of rowsX and valsX (ArrayBuilder has no length), used to track missingRowIndices
+  private var sparseLength = 0 // current length of rowsX and valsX, used to track missingRowIndices
   private var sumX = 0
 
   def merge(g: Genotype): SparseGtBuilder = {
@@ -111,6 +134,23 @@ class SparseGtBuilder extends Serializable {
     (new SparseVector(rowsXArray, valsXArray, nSamples), isConstant, meanX)
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 class SparseIndexGtBuilder extends Serializable {
   private val hetIndices = new mutable.ArrayBuilder.ofInt()
@@ -165,7 +205,6 @@ case class SparseIndexGtArrays(n: Int, hetIndices: Array[Int], homVarIndices: Ar
     DenseVector(data)
   }
 }
-
 
 // assumes column major
 object DM_SIA_Eq_DV {
@@ -228,31 +267,8 @@ object DM_SIA_Eq_DV {
   }
 }
 
-// mean centered and variance normalized
-object ToNormalizedGtArray {
-  def apply(gs: Iterable[Genotype], nSamples: Int): Option[Array[Double]] = {
-    val (nPresent, gtSum, gtSumSq) = gs.flatMap(_.gt).foldLeft((0, 0, 0))((acc, gt) => (acc._1 + 1, acc._2 + gt, acc._3 + gt * gt))
-    val nMissing = nSamples - nPresent
-    val allHomRef = gtSum == 0
-    val allHet = gtSum == nPresent && gtSumSq == nPresent
-    val allHomVar = gtSum == 2 * nPresent
 
-    if (allHomRef || allHomVar || allHet)
-      None
-    else {
-      val gtMean = gtSum.toDouble / nPresent
-      val gtMeanAll = (gtSum + nMissing * gtMean) / nSamples
-      val gtMeanSqAll = (gtSumSq + nMissing * gtMean * gtMean) / nSamples
-      val gtStdDevRec = 1d / math.sqrt(gtMeanSqAll - gtMeanAll * gtMeanAll)
-
-      if (gtStdDevRec.isNaN())
-        println(gtSum, gtSumSq, gtMeanSqAll, gtMeanAll * gtMeanAll, gs.map(_.gt.get))
-
-      Some(gs.map(_.gt.map(g => (g - gtMean) * gtStdDevRec).getOrElse(0d)).toArray)
-    }
-  }
-}
-
+// currently not used
 object ToGtDenseVector {
   def apply(gs: Iterable[Genotype], sampleMask: Array[Boolean], nSamples: Int): Option[DenseVector[Double]] = {
     val gtArray = new Array[Double](nSamples)
@@ -291,7 +307,11 @@ object ToGtDenseVector {
   }
 }
 
-// FIXME: not working
+
+
+
+
+// FIXME: not working, trying to work in blocks
 object ToRRM {
   def apply(vds: VariantDataset): DenseMatrix[Double] = {
     require(vds.nSamples > 0)
