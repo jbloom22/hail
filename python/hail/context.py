@@ -611,6 +611,14 @@ class HailContext(object):
         jkeys = jarray(self._jvm.java.lang.String, keys)
         return KeyTable(self, self._hail.keytable.KeyTable.fromDF(self._jhc, df._jdf, jkeys))
 
+    def natives(self, n):
+        """Test natives.
+
+        :param int n: Dimension.
+
+        """
+        return self.hail.driver.NativesCommand.apply(n)
+
     @handle_py4j
     def eval_expr_typed(self, expr):
         """Evaluate an expression and return the result as well as its type.
