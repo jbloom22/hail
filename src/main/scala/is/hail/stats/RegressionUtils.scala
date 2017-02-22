@@ -69,15 +69,16 @@ object RegressionUtils {
     (y, cov, completeSamples)
   }
 
-  def buildGtColumn(gts: Iterable[Option[Int]]): Option[DenseMatrix[Double]] = {
-    val (nCalled, gtSum, allHet) = gts.flatten.foldLeft((0, 0, true))((acc, gt) => (acc._1 + 1, acc._2 + gt, acc._3 && (gt == 1) ))
+  def buildGtColumn(gts: Iterable[Int]): Option[DenseMatrix[Double]] = {
+    val (nCalled, gtSum, allHet) = gts.filter(_ != -1).foldLeft((0, 0, true))((acc, gt) => (acc._1 + 1, acc._2 + gt, acc._3 && (gt == 1) ))
 
     // allHomRef || allHet || allHomVar || allNoCall
     if (gtSum == 0 || allHet || gtSum == 2 * nCalled || nCalled == 0 )
       None
     else {
       val gtMean = gtSum.toDouble / nCalled
-      val gtArray = gts.map(_.map(_.toDouble).getOrElse(gtMean)).toArray
+      val gtArray = gts.map(g => if (g != -1) g.toDouble else gtMean).toArray
+      println(gtArray.toIndexedSeq)
       Some(new DenseMatrix(gtArray.length, 1, gtArray))
     }
   }

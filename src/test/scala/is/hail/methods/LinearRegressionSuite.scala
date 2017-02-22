@@ -38,7 +38,8 @@ class LinearRegressionSuite extends SparkSuite {
     // x = (2, 2, 2, 2, 2, 2)
     val v9 = Variant("1", 9, "C", "T")
     // x = (., 1, 1, 1, 1, 1)
-    val v10 = Variant("1", 10, "C", "T") // x = (., 2, 2, 2, 2, 2)
+    val v10 = Variant("1", 10, "C", "T")
+    // x = (., 2, 2, 2, 2, 2)
 
     val qBeta = vds.queryVA("va.linreg.beta")._2
     val qSe = vds.queryVA("va.linreg.se")._2
