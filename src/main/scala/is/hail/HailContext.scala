@@ -2,6 +2,7 @@ package is.hail
 
 import java.util.Properties
 
+import breeze.linalg.{DenseMatrix, DenseVector}
 import is.hail.annotations.Annotation
 import is.hail.expr.{EvalContext, Parser, TStruct, Type, _}
 import is.hail.io.bgen.BgenLoader
@@ -582,13 +583,21 @@ class HailContext private(val sc: SparkContext,
     (f(), t)
   }
 
+  def nativesBug(n: Int) {
+    val A = DenseMatrix.rand[Double](n, n)
+    val v = DenseVector.rand[Double](n)
+    val u = A \ v
+
+    println(u)
+    println("Success!")
+  }
+
   /**
     *
     *
     * @param collection SolrCloud collection
     * @param url Solr instance (URL) to connect to
-    * @param zkHost Zookeeper host string to connect to
-    * @param jsonFields Comma-separated list of JSON-encoded fields
+    * @param zkHost Zookeeper host string to connect to    * @param jsonFields Comma-separated list of JSON-encoded fields
     * @param solrOnly Return results directly queried from Solr
     * @param address Cassandra contact point to connect to
     * @param keyspace Cassandra keyspace
