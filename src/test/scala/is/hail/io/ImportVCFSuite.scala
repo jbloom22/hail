@@ -101,14 +101,14 @@ class ImportVCFSuite extends SparkSuite {
 
   @Test def testBadAD() {
     val vds = hc.importVCF("src/test/resources/sample_bad_AD.vcf", skipBadAD = true)
-    assert(vds.expand()
+    assert(vds.expandVDS()
       .map(_._3)
       .collect()
       .contains(Genotype(Some(0), None, Some(30), Some(72), Some(Array(0, 72, 1080)))))
 
     val failVDS = hc.importVCF("src/test/resources/sample_bad_AD.vcf")
     val e = intercept[SparkException] {
-      failVDS.expand()
+      failVDS.expandVDS()
         .map(_._3)
         .collect()
         .contains(Genotype(Some(0), None, Some(30), Some(72), Some(Array(0, 72, 1080))))

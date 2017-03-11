@@ -827,7 +827,7 @@ class MutableGenotype(nAlleles: Int) extends Genotype {
   def fakeRef: Boolean = _fakeRef
   def isDosage: Boolean = _isDosage
 
-  def toGenericGenotype: Genotype = new GenericGenotype(_gt, _ad, _dp, _gq, _px, _fakeRef, _isDosage)
+  def toGenericGenotype: Genotype = new GenericGenotype(_gt, if (_hasAD) _ad else null, _dp, _gq, if (_hasPX) _px else null, _fakeRef, _isDosage)
 
   def ad: Option[Array[Int]] = if (_hasAD) Some(_ad) else None
 

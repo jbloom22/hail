@@ -3,6 +3,7 @@ package is.hail.utils.richUtils
 import java.io.Serializable
 
 import is.hail.utils._
+import is.hail.variant.{Genotype, GenotypeStream}
 
 import scala.collection.{TraversableOnce, mutable}
 
@@ -26,6 +27,21 @@ class RichIterable[T](val i: Iterable[T]) extends Serializable {
       def iterator: Iterator[S] = new Iterator[S] {
         val it: Iterator[T] = i.iterator
         val it2: Iterator[T2] = i2.iterator
+
+        def hasNext: Boolean = it.hasNext && it2.hasNext
+
+        def next(): S = f(it.next(), it2.next())
+      }
+    }
+
+  def lazyMapWithGenotype[S](i2: Iterable[Genotype], f: (T, Genotype) => S): Iterable[S] =
+    new Iterable[S] with Serializable {
+      def iterator: Iterator[S] = new Iterator[S] {
+        val it: Iterator[T] = i.iterator
+        val it2: Iterator[Genotype] = i2 match {
+          case gs: GenotypeStream => gs.genericIterator
+          case _ => i2.iterator
+        }
 
         def hasNext: Boolean = it.hasNext && it2.hasNext
 

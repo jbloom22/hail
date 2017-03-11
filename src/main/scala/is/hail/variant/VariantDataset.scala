@@ -1,6 +1,6 @@
 package is.hail.variant
 
-import java.io.FileNotFoundException
+import java.io.{FileNotFoundException, Serializable}
 
 import is.hail.HailContext
 import is.hail.annotations.{Annotation, _}
@@ -1354,5 +1354,34 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
       .format("org.apache.kudu.spark.kudu").save
 
     info("Written to Kudu")
+  }
+
+  def expandVDS(): RDD[(Variant, String, Genotype)] =
+    vds.mapGenotypesWithKeys[(Variant, String, Genotype)]((v, s, g) => (v, s, g))
+
+  def mapGenotypesWithKeys[U](f: (Variant, String, Genotype) => U)(implicit uct: ClassTag[U]): RDD[U] = {
+    val localSampleIdsBc = vds.sampleIdsBc
+    val isDosage = vds.isDosage
+
+    vds
+      .rdd
+      .flatMap { case (v, (va, gs)) =>
+        localSampleIdsBc.value.lazyMapWithGenotype[U](gs.toGenotypeStream(v, isDosage),
+          (s, g) => f(v, s, g))
+      }
+  }
+
+  def filterSamplesVDS(p: (String, Annotation) => Boolean): VariantDataset = {
+    val mask = vds.sampleIdsAndAnnotations.map { case (s, sa) => p(s, sa) }
+    val maskBc = vds.sparkContext.broadcast(mask)
+    vds.copy(sampleIds = vds.sampleIds.zipWithIndex
+      .filter { case (s, i) => mask(i) }
+      .map(_._1),
+      sampleAnnotations = vds.sampleAnnotations.zipWithIndex
+        .filter { case (sa, i) => mask(i) }
+        .map(_._1),
+      rdd = vds.rdd.mapValues { case (va, gs) =>
+        (va, gs.lazyFilterWithGenotypes(maskBc.value, (g: Genotype, m: Boolean) => m))
+      }.asOrderedRDD)
   }
 }

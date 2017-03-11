@@ -1088,13 +1088,6 @@ class VariantSampleMatrix[T](val hc: HailContext, val metadata: VariantMetadata,
     }.asOrderedRDD)
   }
 
-  def harden(): VariantSampleMatrix[T] = {
-    copy(rdd = rdd.mapPartitions( it => {
-      val ab = new mutable.ArrayBuilder.ofRef[(Variant, (Annotation, Iterable[T]))]()
-      it.foreach( ab += _.copy())
-      ab.result().toIterator}, preservesPartitioning = true).asOrderedRDD)
-  }
-
   def minrep(maxShift: Int = 100): VariantSampleMatrix[T] = {
     require(maxShift > 0, s"invalid value for maxShift: $maxShift. Parameter must be a positive integer.")
     val minrepped = rdd.map {

@@ -197,7 +197,7 @@ class VSMSuite extends SparkSuite {
 
   @Test def testFilterSamples() {
     val vds = hc.importVCF("src/test/resources/sample.vcf.gz", force = true)
-    val vdsAsMap = vds.mapWithKeys((v, s, g) => ((v, s), g)).collectAsMap()
+    val vdsAsMap = vds.mapGenotypesWithKeys((v, s, g) => ((v, s), g)).collectAsMap()
     val nSamples = vds.nSamples
 
     // FIXME ScalaCheck
@@ -218,15 +218,15 @@ class VSMSuite extends SparkSuite {
       }
 
       val localKeep = keep
-      val filtered = vds.filterSamples((s, sa) => localKeep(s))
+      val filtered = vds.filterSamplesVDS((s, sa) => localKeep(s))
 
-      val filteredAsMap = filtered.mapWithKeys((v, s, g) => ((v, s), g)).collectAsMap()
+      val filteredAsMap = filtered.mapGenotypesWithKeys((v, s, g) => ((v, s), g)).collectAsMap()
       filteredAsMap.foreach { case (k, g) => assert(vdsAsMap(k) == g) }
 
       assert(filtered.nSamples == keep.size)
       assert(filtered.sampleIds.toSet == keep)
 
-      val sampleKeys = filtered.mapWithKeys((v, s, g) => s).distinct.collect()
+      val sampleKeys = filtered.mapGenotypesWithKeys((v, s, g) => s).distinct.collect()
       assert(sampleKeys.toSet == keep)
 
       val filteredOut = tmpDir.createTempFile("filtered", extension = ".vds")

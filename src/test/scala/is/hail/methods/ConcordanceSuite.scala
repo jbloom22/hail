@@ -117,8 +117,8 @@ class ConcordanceSuite extends SparkSuite {
       val uniqueVds1Variants = (variants1 -- commonVariants).size
       val uniqueVds2Variants = (variants2 -- commonVariants).size
 
-      val innerJoin = vds1.expand().map { case (v, s, g) => ((v, s), g) }
-        .join(vds2.expand().map { case (v, s, g) => ((v, s), g) })
+      val innerJoin = vds1.expandVDS().map { case (v, s, g) => ((v, s), g) }
+        .join(vds2.expandVDS().map { case (v, s, g) => ((v, s), g) })
 
       val innerJoinSamples = innerJoin.map { case (k, v) => (k._2, v) }
         .aggregateByKey(new ConcordanceCombiner)({ case (comb, (g1, g2)) =>

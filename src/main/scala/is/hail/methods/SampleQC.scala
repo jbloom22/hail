@@ -228,6 +228,7 @@ class SampleQCCombiner extends Serializable {
 object SampleQC {
   def results(vds: VariantDataset): Map[String, SampleQCCombiner] = {
     val depth = treeAggDepth(vds.hc, vds.nPartitions)
+    val isDosage = vds.isDosage
     vds.sampleIds.iterator
       .zip(
         vds
