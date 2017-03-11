@@ -2,6 +2,7 @@ package is.hail.methods
 
 import is.hail.expr._
 import is.hail.utils.TestRDDBuilder
+import is.hail.variant.{GenericGenotype, Genotype, MutableGenotype, VariantDataset, VariantSampleMatrix}
 import is.hail.{SparkSuite, TestUtils}
 import org.testng.annotations.Test
 
@@ -156,13 +157,41 @@ class FilterSuite extends SparkSuite {
   }
 
   @Test def testPAB() {
+
     hc.importVCF("src/test/resources/sample.vcf")
       .splitMulti()
       .filterGenotypes("g.isHet && g.pAB > 0.0005")
       .expand()
       .collect()
       .foreach { case (v, s, g) =>
+        println(g)
+        println(g.pAB())
         assert(!g.isHet || g.pAB().forall(_ > 0.0005))
       }
+  }
+
+  @Test def testPAB2() {
+
+    hc.importVCF("src/test/resources/sample.vcf")
+      .splitMulti()
+      .filterGenotypes("g.isHet && g.pAB > 0.0005")
+      .rdd.collect()
+      .foreach { case (v, (va, gs)) =>
+        gs.foreach { g =>
+          println(g)
+          println(g.pAB())
+          assert(!g.isHet || g.pAB().forall(_ > 0.0005))
+        }
+      }
+  }
+
+  @Test def copyTest() {
+    val mg = new MutableGenotype(2)
+    val mg2 = mg.copy()
+    println(mg.eq(mg2))
+
+    val gg = Genotype()
+    val gg2 = gg.copy()
+    println(gg.eq(gg2))
   }
 }
