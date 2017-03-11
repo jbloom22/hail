@@ -23,6 +23,8 @@ class HardCallGenotypeStreamIterator(nAlleles: Int, isDosage: Boolean, b: ByteIt
 }
 
 class MutableGenotypeStreamIterator(nAlleles: Int, isDosage: Boolean, b: ByteIterator) extends Iterator[Genotype] {
+  self =>
+
   private val mutableGenotype = new MutableGenotype(nAlleles)
 
   override def hasNext: Boolean = b.hasNext
@@ -30,6 +32,11 @@ class MutableGenotypeStreamIterator(nAlleles: Int, isDosage: Boolean, b: ByteIte
   override def next(): Genotype = {
     mutableGenotype.read(nAlleles, isDosage, b)
     mutableGenotype
+  }
+
+  def toIteratorGenotype: Iterator[Genotype] = new Iterator[Genotype] {
+    def hasNext: Boolean = self.hasNext
+    def next(): Genotype = self.next().asGenericGenotype
   }
 }
 

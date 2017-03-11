@@ -72,6 +72,11 @@ abstract class Genotype extends Serializable {
     fakeRef: Boolean = this.fakeRef,
     isDosage: Boolean = this.isDosage): Genotype = Genotype(gt, ad, dp, gq, px, fakeRef, isDosage)
 
+  def asGenericGenotype: Genotype =
+    this match {
+      case g: MutableGenotype => g.toGenericGenotype
+      case _ => this
+    }
 
   override def equals(that: Any): Boolean = that match {
     case g: Genotype =>
@@ -821,6 +826,8 @@ class MutableGenotype(nAlleles: Int) extends Genotype {
   def unboxedGT: Int = _gt
   def fakeRef: Boolean = _fakeRef
   def isDosage: Boolean = _isDosage
+
+  def toGenericGenotype: Genotype = new GenericGenotype(_gt, _ad, _dp, _gq, _px, _fakeRef, _isDosage)
 
   def ad: Option[Array[Int]] = if (_hasAD) Some(_ad) else None
 
