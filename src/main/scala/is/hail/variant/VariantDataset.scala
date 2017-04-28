@@ -837,6 +837,11 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
     LogisticRegression(vds, test, y, covariates, root)
   }
 
+  def logregBurden(keyName: String, variantKeys: String, aggExpr: String, test: String, y: String, covariates: Array[String] = Array.empty[String], singleKey: Boolean = false): (KeyTable, KeyTable) = {
+    requireSplit("linear burden regression")
+    LogisticRegressionBurden(vds, keyName, variantKeys, aggExpr, test, y, covariates, singleKey)
+  }
+
   def makeSchemaForKudu(): StructType =
     makeSchema(parquetGenotypes = false).add(StructField("sample_group", StringType, nullable = false))
 

@@ -1,13 +1,11 @@
 package is.hail.methods
 
 import breeze.linalg._
-import is.hail.annotations.Annotation
 import is.hail.expr._
 import is.hail.keytable.KeyTable
 import is.hail.stats._
 import is.hail.utils._
 import is.hail.variant._
-import net.sourceforge.jdistlib.T
 import org.apache.spark.sql.Row
 
 object LogisticRegressionBurden {
@@ -76,31 +74,20 @@ object LogisticRegressionBurden {
     val nullFitBc = sc.broadcast(nullFit)
     val logRegTestBc = sc.broadcast(logRegTest)
 
-    val nBefore = vds.nSamples
+    val nSamplesBeforeMask = vds.nSamples
     val emptyStats = logRegTest.emptyStats
 
-    val logregRDD = sampleKT.rdd.mapPartitions( { it =>
+    val logregRDD = sampleKT.rdd.mapPartitions({ it =>
       val X = XBc.value.copy
       it.map { keyedRow =>
         val key = keyedRow.get(0)
-        val xArray = Array.ofDim[Double](n)
-        var i = 0
-        while (i < nBefore){
-          i += 1
-          X.data() == keyedRow(i).asInstanceOf[java.lang.Double]
 
-        }
-        RegressionUtils.denseStats(keyedRow, y) match {
-          case Some((x, _, _)) =>
-            if (RegressionUtils.setLastColumnToMaskedGts(X, , sampleMaskBc.value))
-              logRegTestBc.value.test(X, yBc.value, nullFitBc.value).toAnnotation(emptyStats)
-            else
-              null
-          case None =>
-            Row(key +: emptyStats)
-
-        }
-
+        if (RegressionUtils.setLastColumnBurden(X, keyedRow))
+          logRegTestBc.value.test(X, yBc.value, nullFitBc.value).toAnnotation(emptyStats).asInstanceOf[Row]
+        else
+          Row(key +: emptyStats)
+      }
+    })
 
     def logregSignature = TStruct(keyName -> keyType).merge(logRegTest.schema.asInstanceOf[TStruct])._1
 
