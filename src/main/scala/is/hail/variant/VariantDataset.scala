@@ -10,7 +10,7 @@ import is.hail.io.annotators.IntervalListAnnotator
 import is.hail.io.plink.ExportBedBimFam
 import is.hail.io.vcf.{BufferedLineIterator, ExportVCF}
 import is.hail.keytable.KeyTable
-import is.hail.methods._
+import is.hail.methods.{LogisticRegressionBurden, _}
 import is.hail.sparkextras.{OrderedPartitioner, OrderedRDD}
 import is.hail.stats.ComputeRRM
 import is.hail.utils._
@@ -835,6 +835,11 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
   def logreg(test: String, y: String, covariates: Array[String] = Array.empty[String], root: String = "va.logreg"): VariantDataset = {
     requireSplit("logistic regression")
     LogisticRegression(vds, test, y, covariates, root)
+  }
+
+  def logregBurden(keyName: String, variantKeys: String, aggExpr: String, test: String, y: String, covariates: Array[String] = Array.empty[String], singleKey: Boolean = false): (KeyTable, KeyTable) = {
+    requireSplit("linear burden regression")
+    LogisticRegressionBurden(vds, keyName, variantKeys, aggExpr, test, y, covariates, singleKey)
   }
 
   def makeSchemaForKudu(): StructType =
