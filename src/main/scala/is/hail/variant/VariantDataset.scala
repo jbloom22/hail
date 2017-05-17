@@ -591,7 +591,7 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
     LDPrune(vds, r2Threshold, windowSize, nCores, memoryPerCore * 1024L * 1024L)
   }
 
-  def linreg(y: String, covariates: Array[String] = Array.empty[String], root: String = "va.linreg", useDosages: Boolean = false, minAC: Int = 1, minAF: Double = 0d): VariantDataset = {
+  def linreg(y: String, covariates: Array[String] = Array.empty[String], root: String = "va.linreg", useDosages: Boolean = false, minAC: Int = 0, minAF: Double = 0d): VariantDataset = {
     requireSplit("linear regression")
     LinearRegression(vds, y, covariates, root, useDosages, minAC, minAF)
   }

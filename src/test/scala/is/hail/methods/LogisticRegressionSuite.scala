@@ -16,11 +16,15 @@ class LogisticRegressionSuite extends SparkSuite {
   def assertDouble(a: Annotation, value: Double, tol: Double = 1e-6) {
     assert(D_==(a.asInstanceOf[Double], value, tol))
   }
-
+  
+  def assertNaN(a: Annotation) {
+    assert(a.asInstanceOf[Double].isNaN)
+  }
+  
   def assertConsistentWithConstant(converged: Annotation, pval: Annotation) {
     assert(!converged.asInstanceOf[Boolean] || pval.asInstanceOf[Double].isNaN)
   }
-
+  
   // x = (0, 1, 0, 0, 0, 1, 0, 0, 0, 0)
   val v1 = Variant("1", 1, "C", "T")
   // x = (., 2, ., 2, 0, 0, 0, 0, 0, 0)
@@ -47,7 +51,7 @@ class LogisticRegressionSuite extends SparkSuite {
     val vds = hc.importVCF("src/test/resources/regressionLogistic.vcf")
       .annotateSamplesTable(covariates, root = "sa.cov")
       .annotateSamplesTable(phenotypes, root = "sa.pheno")
-      .logreg("wald", "sa.pheno", Array("sa.cov.Cov1", "sa.cov.Cov2"), "va.logreg")
+      .logreg("wald", "sa.pheno", Array("sa.cov.Cov1", "sa.cov.Cov2"))
 
     val qBeta = vds.queryVA("va.logreg.beta")._2
     val qSe = vds.queryVA("va.logreg.se")._2
@@ -93,12 +97,14 @@ class LogisticRegressionSuite extends SparkSuite {
     // assertExploded(v3), explodes at iteration ~30, but we cap at 25
     assert(!qConverged(a(v3)).asInstanceOf[Boolean])
 
+    println(a)
+    
     // constant genotypes after imputation
-    assert(qConverged(a(v6)) == null)
-    assert(qConverged(a(v7)) == null)
-    assert(qConverged(a(v8)) == null)
-    assert(qConverged(a(v9)) == null)
-    assert(qConverged(a(v10)) == null)
+    assert(!qConverged(a(v6)).asInstanceOf[Boolean])
+    assert(!qConverged(a(v7)).asInstanceOf[Boolean])
+    assert(!qConverged(a(v8)).asInstanceOf[Boolean])
+    assert(!qConverged(a(v9)).asInstanceOf[Boolean])
+    assert(!qConverged(a(v10)).asInstanceOf[Boolean])
   }
 
   @Test def waldTestWithTwoCovPhred() {
@@ -278,11 +284,11 @@ class LogisticRegressionSuite extends SparkSuite {
     assert(!qConverged(a(v3)).asInstanceOf[Boolean])
 
     // constant genotypes after imputation
-    assert(qConverged(a(v6)) == null)
-    assert(qConverged(a(v7)) == null)
-    assert(qConverged(a(v8)) == null)
-    assert(qConverged(a(v9)) == null)
-    assert(qConverged(a(v10)) == null)
+    assert(!qConverged(a(v6)).asInstanceOf[Boolean])
+    assert(!qConverged(a(v7)).asInstanceOf[Boolean])
+    assert(!qConverged(a(v8)).asInstanceOf[Boolean])
+    assert(!qConverged(a(v9)).asInstanceOf[Boolean])
+    assert(!qConverged(a(v10)).asInstanceOf[Boolean])
   }
 
   @Test def scoreTestWithTwoCov() {
@@ -330,13 +336,18 @@ class LogisticRegressionSuite extends SparkSuite {
 
     assertDouble(qChi2(a(v3)), 7.047367694)
     assertDouble(qPVal(a(v3)), 0.007938182229)
-
+    
+    def assertChi2ConsistentWithConstant(v: Variant) {
+      val chi2 = qChi2(a(v))
+      assert(chi2 == null || chi2.asInstanceOf[Double] < 1e-12)
+    }
+    
     // constant genotypes after imputation
-    assert(qChi2(a(v6)) == null)
-    assert(qChi2(a(v7)) == null)
-    assert(qChi2(a(v8)) == null)
-    assert(qChi2(a(v9)) == null)
-    assert(qChi2(a(v10)) == null)
+    assertChi2ConsistentWithConstant(v6)
+    assertChi2ConsistentWithConstant(v7)
+    assertChi2ConsistentWithConstant(v8)
+    assertChi2ConsistentWithConstant(v9)
+    assertChi2ConsistentWithConstant(v10)
   }
 
   @Test def waldEpactsTest() {

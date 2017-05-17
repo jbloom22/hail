@@ -60,18 +60,13 @@ object LogisticRegression {
     vds.copy(rdd = vds.rdd.mapPartitions( { it =>
       val X = XBc.value.copy
       it.map { case (v, (va, gs)) =>
-        val isNotDegenerate =
-          if (useDosages)
-            RegressionUtils.setLastColumnToMaskedGts(X, gs.dosageIterator, sampleMaskBc.value, useHardCalls=false)
+        X(::, -1) :=
+          (if (!useDosages)
+            RegressionUtils.hardCalls(gs, n, sampleMaskBc.value)
           else
-            RegressionUtils.setLastColumnToMaskedGts(X, gs.hardCallIterator, sampleMaskBc.value, useHardCalls=true)
+            RegressionUtils.dosages(gs, n, sampleMaskBc.value)): Vector[Double]
 
-        val logregAnnot =
-          if (isNotDegenerate)
-            logRegTestBc.value.test(X, yBc.value, nullFitBc.value).toAnnotation
-          else
-            null
-
+        val logregAnnot = logRegTestBc.value.test(X, yBc.value, nullFitBc.value).toAnnotation
         val newAnnotation = inserter(va, logregAnnot)
         assert(newVAS.typeCheck(newAnnotation))
         (v, (newAnnotation, gs))
