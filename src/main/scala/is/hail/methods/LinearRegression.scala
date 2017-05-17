@@ -25,11 +25,11 @@ object LinearRegression {
     val k = cov.cols
     val d = n - k - 1
 
-    if (minAC < 1)
-      fatal(s"Minumum alternate allele count must be a positive integer, got $minAC")
-    if (minAF < 0d || minAF > 1d)
+    if (minAC < 0)
+      fatal(s"Minumum alternate allele count must be a non-negative integer, got $minAC")
+    if (minAF < 0 || minAF > 1)
       fatal(s"Minumum alternate allele frequency must lie in [0.0, 1.0], got $minAF")
-    val combinedMinAC = math.max(minAC, (math.ceil(2 * n * minAF) + 0.5).toInt)
+    val combinedMinAC = math.max(minAC, 2 * n * minAF)
 
     if (d < 1)
       fatal(s"$n samples and $k ${ plural(k, "covariate") } including intercept implies $d degrees of freedom.")
@@ -50,18 +50,13 @@ object LinearRegression {
     val (newVAS, inserter) = vds.insertVA(LinearRegression.schema, pathVA)
 
     vds.mapAnnotations { case (v, va, gs) =>
+      val x: Vector[Double] =
+        if (!useDosages)
+          RegressionUtils.hardCalls(gs, n, sampleMaskBc.value)
+        else
+          RegressionUtils.dosages(gs, n, sampleMaskBc.value)
 
-      val (x: Vector[Double], isValid: Boolean) =
-        if (useDosages) {
-          val (x, mean) = RegressionUtils.dosageStats(gs, sampleMaskBc.value, n)
-          (x, n * mean >= combinedMinAC)
-        } else {
-          val (x, nHet, nHomVar, nMissing) = RegressionUtils.hardCallStats(gs, sampleMaskBc.value)
-          val ac = nHet + 2 * nHomVar
-          (x, !(ac < combinedMinAC || ac == 2 * (n - nMissing) || (ac == (n - nMissing) && x.forall(_ == 1))))
-        }
-
-      val linregAnnot = if (isValid) {
+      val linregAnnot = if (sum(x) >= combinedMinAC) {
         val qtx = QtBc.value * x
         val qty = QtyBc.value
         val xxp: Double = (x dot x) - (qtx dot qtx)

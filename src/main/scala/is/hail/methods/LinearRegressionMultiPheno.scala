@@ -48,24 +48,17 @@ object LinearRegressionMultiPheno {
     val QtyBc = sc.broadcast(Qty)
     val yypBc = sc.broadcast(y.t(*, ::).map(r => r dot r) - Qty.t(*, ::).map(r => r dot r))
 
-    val yDummyBc = sc.broadcast(DenseVector.zeros[Double](n)) // dummy input in order to reuse RegressionUtils
-
     val pathVA = Parser.parseAnnotationRoot(root, Annotation.VARIANT_HEAD)
     val (newVAS, inserter) = vds.insertVA(LinearRegressionMultiPheno.schema, pathVA)
 
     vds.mapAnnotations { case (v, va, gs) =>
+      val x: Vector[Double] =
+        if (!useDosages)
+          RegressionUtils.hardCalls(gs, n, sampleMaskBc.value)
+        else
+          RegressionUtils.dosages(gs, n, sampleMaskBc.value)
 
-      val (x: Vector[Double], isValid: Boolean) =
-        if (useDosages) {
-          val (x, mean) = RegressionUtils.dosageStats(gs, sampleMaskBc.value, n)
-          (x, n * mean >= combinedMinAC)
-        } else {
-          val (x, nHet, nHomVar, nMissing) = RegressionUtils.hardCallStats(gs, sampleMaskBc.value)
-          val ac = nHet + 2 * nHomVar
-          (x, !(ac < combinedMinAC || ac == 2 * (n - nMissing) || (ac == (n - nMissing) && x.forall(_ == 1))))
-        }
-
-      val linregAnnot = if (isValid) {
+      val linregAnnot = if (sum(x) >= combinedMinAC) {
         val qtx: DenseVector[Double] = QtBc.value * x
         val qty: DenseMatrix[Double] = QtyBc.value
         val xxpRec: Double = 1 / ((x dot x) - (qtx dot qtx))
