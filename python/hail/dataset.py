@@ -4,8 +4,6 @@ import warnings
 
 from decorator import decorator
 
-from hail.expr import TVariant
-from hail.expr import Type, TGenotype
 from hail.typecheck import *
 from hail.java import *
 from hail.keytable import KeyTable
@@ -2434,22 +2432,25 @@ class VariantDataset(object):
         is coded as :math:`1` for true (female) and :math:`0` for false (male). The null
         model sets :math:`\beta_1 = 0`.
 
-        :py:meth:`.linreg` skips variants that don't vary across the included samples,
-        such as when all genotypes are homozygous reference. One can further
-        restrict computation to those variants with at least :math:`k` observed
+        To restrict computation to those variants with at least :math:`k`
         alternate alleles (AC) or alternate allele frequency (AF) at least
-        :math:`p` in the included samples using the options ``minac=k`` or
-        ``minaf=p``, respectively. Unlike the :py:meth:`.filter_variants_expr`
-        method, these filters do not remove variants from the underlying
-        variant dataset. Adding both filters is equivalent to applying the more
-        stringent of the two, as AF equals AC over twice the number of included
-        samples.
+        :math:`p` in the included samples, use the options ``min_ac=k`` or
+        ``min_af=p``, respectively. Here AC is defined as the sum
+        of hard calls or dosages post-imputation, so  AC equals AF times
+        twice the number of included samples; and adding both filters is
+        equivalent to applying the more stringent of the two. Unlike the
+        :py:meth:`.filter_variants_expr` method, these filters do not remove
+        variants from the underlying variant dataset; rather, the linear
+        regression annotations for variants with low AC are set to missing.
 
-        Phenotype and covariate sample annotations may also be specified using `programmatic expressions <exprlang.html>`__ without identifiers, such as:
+        Phenotype and covariate sample annotations may also be specified using
+        `programmatic expressions <exprlang.html>`__ without identifiers, such as:
 
         >>> vds_result = vds.linreg('if (sa.pheno.isFemale) sa.pheno.age else (2 * sa.pheno.age + 10)', covariates=[])
 
-        For Boolean covariate types, true is coded as 1 and false as 0. In particular, for the sample annotation ``sa.fam.isCase`` added by importing a FAM file with case-control phenotype, case is 1 and control is 0.
+        For Boolean covariate types, true is coded as 1 and false as 0.
+        In particular, for the sample annotation ``sa.fam.isCase`` added by
+        importing a FAM file with case-control phenotype, case is 1 and control is 0.
 
         The standard least-squares linear regression model is derived in Section
         3.2 of `The Elements of Statistical Learning, 2nd Edition
@@ -2818,8 +2819,6 @@ class VariantDataset(object):
         +------------------------+--------+-------------------------------------------------------------------------+
         | ``va.lmmreg.pval``     | Double | :math:`p`-value                                                         |
         +------------------------+--------+-------------------------------------------------------------------------+
-
-        Those variants that don't vary across the included samples (e.g., all genotypes are HomRef) will have missing annotations.
 
         The simplest way to export all resulting annotations is:
 
