@@ -156,9 +156,9 @@ class KeyTable(object):
         """Count the number of rows.
 
         **Examples**
-        
+
         >>> kt1.count()
-        
+
         :rtype: int
         """
 
@@ -174,7 +174,7 @@ class KeyTable(object):
         ...     print("KeyTables are the same!")
 
         :param other: key table to compare against
-        :type other: :class:`.KeyTable` 
+        :type other: :class:`.KeyTable`
 
         :rtype: bool
         """
@@ -195,7 +195,7 @@ class KeyTable(object):
         :param str output: Output file path.
 
         :param str types_file: Output path of types file.
-        
+
         :param bool header: Write a header using the column names.
         """
 
@@ -599,7 +599,7 @@ class KeyTable(object):
     @handle_py4j
     def export_solr(self, zk_host, collection, block_size=100):
         """Export to Solr.
-        
+
         .. warning::
 
           :py:meth:`~.export_solr` is EXPERIMENTAL.
@@ -675,7 +675,7 @@ class KeyTable(object):
 
         :param column_names: Column name(s) to be exploded.
         :type column_names: str or list of str
-            
+
         :return: Key table with columns exploded.
         :rtype: :class:`.KeyTable`
         """
@@ -793,11 +793,11 @@ class KeyTable(object):
 
         >>> kt1.write('output/kt1.kt')
 
-        .. note:: The write path must end in ".kt".       
+        .. note:: The write path must end in ".kt".
 
         :param str output: Path of KT file to write.
 
-        :param bool overwrite: If True, overwrite any existing KT file. Cannot be used 
+        :param bool overwrite: If True, overwrite any existing KT file. Cannot be used
                to read from and write to the same path.
 
         """
@@ -825,20 +825,20 @@ class KeyTable(object):
 
         **Notes**
 
-        The :py:meth:`~hail.KeyTable.persist` and :py:meth:`~hail.KeyTable.cache` methods 
-        allow you to store the current table on disk or in memory to avoid redundant computation and 
+        The :py:meth:`~hail.KeyTable.persist` and :py:meth:`~hail.KeyTable.cache` methods
+        allow you to store the current table on disk or in memory to avoid redundant computation and
         improve the performance of Hail pipelines.
 
-        :py:meth:`~hail.KeyTable.cache` is an alias for 
+        :py:meth:`~hail.KeyTable.cache` is an alias for
         :func:`persist("MEMORY_ONLY") <hail.KeyTable.persist>`.  Most users will want "MEMORY_AND_DISK".
-        See the `Spark documentation <http://spark.apache.org/docs/latest/programming-guide.html#rdd-persistence>`__ 
+        See the `Spark documentation <http://spark.apache.org/docs/latest/programming-guide.html#rdd-persistence>`__
         for a more in-depth discussion of persisting data.
 
         :param storage_level: Storage level.  One of: NONE, DISK_ONLY,
             DISK_ONLY_2, MEMORY_ONLY, MEMORY_ONLY_2, MEMORY_ONLY_SER,
             MEMORY_ONLY_SER_2, MEMORY_AND_DISK, MEMORY_AND_DISK_2,
             MEMORY_AND_DISK_SER, MEMORY_AND_DISK_SER_2, OFF_HEAP
-        
+
         :rtype: :class:`.KeyTable`
         """
 
@@ -847,10 +847,10 @@ class KeyTable(object):
     def unpersist(self):
         """
         Unpersists this table from memory/disk.
-        
+
         **Notes**
         This function will have no effect on a table that was not previously persisted.
-        
+
         There's nothing stopping you from continuing to use a table that has been unpersisted, but doing so will result in
         all previous steps taken to compute the table being performed again since the table must be recomputed. Only unpersist
         a table when you are done with it.
@@ -873,7 +873,7 @@ class KeyTable(object):
 
     def num_partitions(self):
         """Returns the number of partitions in the key table.
-        
+
         :rtype: int
         """
         return self._jkt.nPartitions()
@@ -882,9 +882,9 @@ class KeyTable(object):
     @handle_py4j
     def import_interval_list(path):
         """Import an interval list file in the GATK standard format.
-        
+
         >>> intervals = KeyTable.import_interval_list('data/capture_intervals.txt')
-        
+
         **The File Format**
 
         Hail expects an interval file to contain either three or five fields per
@@ -895,14 +895,14 @@ class KeyTable(object):
         - ``contig  start  end  direction  target`` (tab-separated)
 
         A file in either of the first two formats produces a key table with one column:
-        
+
          - **interval** (*Interval*), key column
-         
+
         A file in the third format (with a "target" column) produces a key with two columns:
-        
+
          - **interval** (*Interval*), key column
          - **target** (*String*)
-         
+
         .. note::
 
             ``start`` and ``end`` match positions inclusively, e.g. ``start <= position <= end``.
@@ -919,9 +919,9 @@ class KeyTable(object):
             by the python parser :py:meth:`~hail.representation.Interval.parse`.  'k', 'm', 'start', and 'end' are all
             invalid motifs in the ``contig:start-end`` format here.
 
-        
+
         :param str filename: Path to file.
-        
+
         :return: Interval-keyed table.
         :rtype: :class:`.KeyTable`
         """
@@ -935,14 +935,14 @@ class KeyTable(object):
 
         **Examples**
 
-        Add the variant annotation ``va.cnvRegion: Boolean`` indicating inclusion in at least one 
+        Add the variant annotation ``va.cnvRegion: Boolean`` indicating inclusion in at least one
         interval of the three-column BED file `file1.bed`:
 
         >>> bed = KeyTable.import_bed('data/file1.bed')
         >>> vds_result = vds.annotate_variants_table(bed, root='va.cnvRegion')
 
         Add a variant annotation **va.cnvRegion** (*String*) with value given by the fourth column of ``file2.bed``:
-        
+
         >>> bed = KeyTable.import_bed('data/file2.bed')
         >>> vds_result = vds.annotate_variants_table(bed, root='va.cnvID')
 
@@ -964,24 +964,24 @@ class KeyTable(object):
 
 
         **Notes**
-        
+
         The key table produced by this method has one of two possible structures. If the .bed file has only
         three fields (``chrom``, ``chromStart``, and ``chromEnd``), then the produced key table has only one
         column:
-        
+
             - **interval** (*Interval*) - Genomic interval.
-         
+
         If the .bed file has four or more columns, then Hail will store the fourth column in the table:
-         
+
              - **interval** (*Interval*) - Genomic interval.
              - **target** (*String*) - Fourth column of .bed file.
-         
 
-        `UCSC bed files <https://genome.ucsc.edu/FAQ/FAQformat.html#format1>`__ can have up to 12 fields, 
+
+        `UCSC bed files <https://genome.ucsc.edu/FAQ/FAQformat.html#format1>`__ can have up to 12 fields,
         but Hail will only ever look at the first four. Hail ignores header lines in BED files.
 
-        .. caution:: 
-        
+        .. caution::
+
             UCSC BED files are 0-indexed and end-exclusive. The line "5  100  105" will contain
             locus ``5:105`` but not ``5:100``. Details `here <http://genome.ucsc.edu/blog/the-ucsc-genome-browser-coordinate-counting-systems/>`__.
 
@@ -1013,10 +1013,10 @@ class KeyTable(object):
           StructType => Struct
 
         Unlisted Spark SQL data types are currently unsupported.
-        
+
         :param df: PySpark DataFrame.
         :type df: ``DataFrame``
-        
+
         :param key: Key column(s).
         :type key: str or list of str
 
@@ -1028,12 +1028,12 @@ class KeyTable(object):
 
     def repartition(self, n):
         """Change the number of distributed partitions.
-        
+
         Always shuffles data.
-        
+
         :param int n: Desired number of partitions.
-        
-        :rtype: :class:`.KeyTable` 
+
+        :rtype: :class:`.KeyTable`
         """
 
         return KeyTable(self.hc, self._jkt.repartition(n))
@@ -1067,9 +1067,9 @@ class KeyTable(object):
             - **patID** (*String*) -- Paternal ID (missing = "0")
             - **matID** (*String*) -- Maternal ID (missing = "0")
             - **isFemale** (*Boolean*) -- Sex (missing = "NA", "-9", "0")
-        
+
         One of:
-    
+
             - **isCase** (*Boolean*) -- Case-control phenotype (missing = "0", "-9", non-numeric or the ``missing`` argument, if given.
             - **qPheno** (*Double*) -- Quantitative phenotype (missing = "NA" or the ``missing`` argument, if given.
 
@@ -1121,20 +1121,20 @@ class KeyTable(object):
     @typecheck_method(n=integral)
     def take(self, n):
         """Take a given number of rows from the head of the table.
-        
+
         **Examples**
-        
+
         Take the first ten rows:
-        
+
         >>> first10 = kt1.take(10)
-        
+
         **Notes**
-        
-        This method does not need to look at all the data, and 
+
+        This method does not need to look at all the data, and
         allows for fast queries of the start of the table.
-        
+
         :param int n: Number of rows to take.
-        
+
         :return: Rows from the start of the table.
         :rtype: list of :class:`.~hail.representation.Struct`
         """

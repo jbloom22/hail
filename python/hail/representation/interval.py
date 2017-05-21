@@ -2,6 +2,7 @@ from hail.java import *
 from hail.representation.variant import Locus
 from hail.typecheck import *
 
+
 class Interval(object):
     """
     A genomic interval marked by start and end loci.

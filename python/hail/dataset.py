@@ -4,8 +4,6 @@ import warnings
 
 from decorator import decorator
 
-from hail.expr import TVariant
-from hail.expr import Type, TGenotype
 from hail.typecheck import *
 from hail.java import *
 from hail.keytable import KeyTable
@@ -193,7 +191,7 @@ class VariantDataset(object):
 
     @handle_py4j
     @typecheck_method(key_exprs=oneof(strlike, listof(strlike)),
-               agg_exprs=oneof(strlike, listof(strlike)))
+                      agg_exprs=oneof(strlike, listof(strlike)))
     def aggregate_by_key(self, key_exprs, agg_exprs):
         """Aggregate by user-defined key and aggregation expressions to produce a KeyTable.
         Equivalent to a group-by operation in SQL.
@@ -228,7 +226,7 @@ class VariantDataset(object):
     @handle_py4j
     @requireTGenotype
     @typecheck_method(expr=oneof(strlike, listof(strlike)),
-               propagate_gq=bool)
+                      propagate_gq=bool)
     def annotate_alleles_expr(self, expr, propagate_gq=False):
         """Annotate alleles with expression.
 
@@ -374,7 +372,7 @@ class VariantDataset(object):
         **Examples**
 
         Add populations as a global annotation:
-        
+
         >>> vds_result = vds.annotate_global('global.populations',
         ...                                     ['EAS', 'AFR', 'EUR', 'SAS', 'AMR'],
         ...                                     TArray(TString()))
@@ -512,8 +510,8 @@ class VariantDataset(object):
         >>> annotations = hc.import_table('data/samples2.tsv', delimiter=',', missing='.').key_by('PT-ID')
         >>> vds_result = vds.annotate_samples_table(annotations, root='sa.batch')
 
-        Let's import annotations from a file with no header and sample IDs that need to be transformed. 
-        Suppose the vds sample IDs are of the form ``NA#####``. This file has no header line, and the 
+        Let's import annotations from a file with no header and sample IDs that need to be transformed.
+        Suppose the vds sample IDs are of the form ``NA#####``. This file has no header line, and the
         sample ID is hidden in a field with other information.
 
         .. code-block:: text
@@ -533,28 +531,28 @@ class VariantDataset(object):
         >>> vds_result = vds.annotate_samples_table(annotations,
         ...                             expr='sa.sex = table.f1, sa.batch = table.f0.split("_")[0]')
 
-        **Notes** 
+        **Notes**
 
         This method takes as an argument a :class:`.KeyTable` object. Hail has a default join strategy
         for tables keyed by String, which is to join by sample ID. If the table is keyed by something else, like
-        population or cohort, then the ``vds_key`` argument must be passed to describe the key in the dataset 
-        to use for the join. This argument expects a list of Hail expressions whose types match, in order, the 
+        population or cohort, then the ``vds_key`` argument must be passed to describe the key in the dataset
+        to use for the join. This argument expects a list of Hail expressions whose types match, in order, the
         table's key types.
-        
+
         Each expression in the list ``vds_key`` has the following symbols in
         scope:
 
           - ``s`` (*String*): sample ID
           - ``sa``: sample annotations
-        
+
         **The ``root`` and ``expr`` arguments**
-        
+
         .. note::
-        
-            One of ``root`` or ``expr`` is required, but not both. 
-            
-        The ``expr`` parameter expects an annotation expression involving ``sa`` (the existing 
-        sample annotations in the dataset) and ``table`` (a struct containing the columns in 
+
+            One of ``root`` or ``expr`` is required, but not both.
+
+        The ``expr`` parameter expects an annotation expression involving ``sa`` (the existing
+        sample annotations in the dataset) and ``table`` (a struct containing the columns in
         the table), like ``sa.col1 = table.col1, sa.col2 = table.col2`` or ``sa = merge(sa, table)``.
         The ``root`` parameter expects an annotation path beginning in ``sa``, like ``sa.annotations``.
         Passing ``root='sa.annotations'`` is exactly the same as passing ``expr='sa.annotations = table'``.
@@ -564,12 +562,12 @@ class VariantDataset(object):
           - ``sa``: sample annotations
           - ``table``: See note.
 
-        .. note:: 
-        
-            The value of ``table`` inside root/expr depends on the number of values in the key table, 
+        .. note::
+
+            The value of ``table`` inside root/expr depends on the number of values in the key table,
             as well as the ``product`` argument. There are three behaviors based on the number of values
             and one branch for ``product`` being true and false, for a total of six modes:
-            
+
             +-------------------------+-------------+--------------------+-----------------------------------------------+
             | Number of value columns | ``product`` | Type of  ``table`` | Value of  ``table``                           |
             +=========================+=============+====================+===============================================+
@@ -584,7 +582,7 @@ class VariantDataset(object):
             | 1                       | True        | ``Array[T]``       | An array with a value for each matching key.  |
             +-------------------------+-------------+--------------------+-----------------------------------------------+
             | 0                       | True        | ``Int``            | The number of matching keys.                  |
-            +-------------------------+-------------+--------------------+-----------------------------------------------+  
+            +-------------------------+-------------+--------------------+-----------------------------------------------+
 
         **Common uses for the** ``expr`` **argument**
 
@@ -607,8 +605,8 @@ class VariantDataset(object):
             expr='''sa.annotations.toKeep1 = table.toKeep1,
                 sa.annotations.toKeep2 = table.toKeep2,
                 sa.annotations.toKeep3 = table.toKeep3'''
-                
-        Finally, for more information about importing key tables from text, 
+
+        Finally, for more information about importing key tables from text,
         see the documentation for :py:meth:`.HailContext.import_table`.
 
         :param table: Key table.
@@ -619,10 +617,10 @@ class VariantDataset(object):
 
         :param expr: Annotation expression. (This or ``root`` required).
         :type expr: str or None
-        
+
         :param vds_key: Join key for the dataset, if not sample ID.
         :type vds_key: str, list of str, or None.
-        
+
         :param bool product: Join with all matching keys (see note).
 
         :return: Annotated variant dataset.
@@ -692,56 +690,56 @@ class VariantDataset(object):
 
         >>> table = hc.import_table('data/variant-lof.tsv', impute=True).key_by('v')
         >>> vds_result = vds.annotate_variants_table(table, root='va.lof')
-        
+
         Add annotations from a locus-keyed TSV:
-        
+
         >>> kt = hc.import_table('data/locus-table.tsv', impute=True).key_by('Locus')
         >>> vds_result = vds.annotate_variants_table(table, root='va.scores')
 
         Add annotations from a gene-and-type-keyed TSV:
-    
+
         >>> table = hc.import_table('data/locus-metadata.tsv', impute=True).key_by(['gene', 'type'])
         >>> vds_result = (vds.annotate_variants_table(table,
         ...       root='va.foo',
         ...       vds_key=['va.gene', 'if (va.score > 10) "Type1" else "Type2"']))
 
         Annotate variants with the target in a GATK interval list file:
-        
+
         >>> intervals = KeyTable.import_interval_list('data/exons2.interval_list')
         >>> vds_result = vds.annotate_variants_table(intervals, root='va.exon')
-        
+
         Annotate variants with all targets from matching intervals in a GATK interval list file:
-        
+
         >>> intervals = KeyTable.import_interval_list('data/exons2.interval_list')
         >>> vds_result = vds.annotate_variants_table(intervals, root='va.exons', product=True)
-        
+
         Annotate variants using a UCSC BED file, marking each variant true/false for an overlap with any interval:
-        
+
         >>> intervals = KeyTable.import_bed('data/file2.bed')
         >>> vds_result = vds.annotate_variants_table(intervals, root='va.bed')
-        
+
         **Notes**
-        
+
         This method takes as an argument a :class:`.KeyTable` object. Hail has default join strategies
         for tables keyed by Variant, Locus, or Interval.
-        
+
         **Join strategies:**
-                  
-        If the key is a ``Variant``, then a variant in the dataset will match a variant in the 
-        table that is equivalent. Be careful, however: ``1:1:A:T`` does not match ``1:1:A:T,C``, 
-        and vice versa. 
-        
+
+        If the key is a ``Variant``, then a variant in the dataset will match a variant in the
+        table that is equivalent. Be careful, however: ``1:1:A:T`` does not match ``1:1:A:T,C``,
+        and vice versa.
+
         If the key is a ``Locus``, then a variant in the dataset will match any locus in the table
         which is equivalent to ``v.locus`` (same chromosome and position).
-            
-        If the key is an ``Interval``, then a variant in the dataset will match any interval in 
+
+        If the key is an ``Interval``, then a variant in the dataset will match any interval in
         the table that contains the variant's locus (chromosome and position).
-        
+
         If the key is not one of the above three types (a String representing gene ID, for instance),
-        or if another join strategy should be used for a key of one of these three types (join with a 
-        locus object in variant annotations, for instance) for these types, then the ``vds_key`` argument 
-        should be passed. This argument expects a list of expressions whose types match, in order, 
-        the table's key types. Note that using ``vds_key`` is slower than annotation with a standard 
+        or if another join strategy should be used for a key of one of these three types (join with a
+        locus object in variant annotations, for instance) for these types, then the ``vds_key`` argument
+        should be passed. This argument expects a list of expressions whose types match, in order,
+        the table's key types. Note that using ``vds_key`` is slower than annotation with a standard
         key type.
 
         Each expression in the list ``vds_key`` has the following symbols in
@@ -749,14 +747,14 @@ class VariantDataset(object):
 
           - ``v`` (*Variant*): :ref:`variant`
           - ``va``: variant annotations
-        
+
         **The** ``root`` **and** ``expr`` **arguments**
-        
+
         .. note::
-        
-            One of ``root`` or ``expr`` is required, but not both. 
-            
-        The ``expr`` parameter expects an annotation assignment involving ``va`` (the existing 
+
+            One of ``root`` or ``expr`` is required, but not both.
+
+        The ``expr`` parameter expects an annotation assignment involving ``va`` (the existing
         variant annotations in the dataset) and ``table`` (the values(s) in the table),
         like ``va.col1 = table.col1, va.col2 = table.col2`` or ``va = merge(va, table)``.
         The ``root`` parameter expects an annotation path beginning in ``va``, like ``va.annotations``.
@@ -767,12 +765,12 @@ class VariantDataset(object):
           - ``va``: variant annotations
           - ``table``: See note.
 
-        .. note:: 
-        
-            The value of ``table`` inside root/expr depends on the number of values in the key table, 
+        .. note::
+
+            The value of ``table`` inside root/expr depends on the number of values in the key table,
             as well as the ``product`` argument. There are three behaviors based on the number of values
             and one branch for ``product`` being true and false, for a total of six modes:
-            
+
             +-------------------------+-------------+--------------------+-----------------------------------------------+
             | Number of value columns | ``product`` | Type of  ``table`` | Value of  ``table``                           |
             +=========================+=============+====================+===============================================+
@@ -787,8 +785,8 @@ class VariantDataset(object):
             | 1                       | True        | ``Array[T]``       | An array with a value for each matching key.  |
             +-------------------------+-------------+--------------------+-----------------------------------------------+
             | 0                       | True        | ``Int``            | The number of matching keys.                  |
-            +-------------------------+-------------+--------------------+-----------------------------------------------+  
-                      
+            +-------------------------+-------------+--------------------+-----------------------------------------------+
+
         **Common uses for the** ``expr`` **argument**
 
         Put annotations on the top level under ``va``:
@@ -810,8 +808,8 @@ class VariantDataset(object):
             expr='''va.annotations.toKeep1 = table.toKeep1,
                 va.annotations.toKeep2 = table.toKeep2,
                 va.annotations.toKeep3 = table.toKeep3'''
-                
-        Finally, for more information about importing key tables from text, 
+
+        Finally, for more information about importing key tables from text,
         see the documentation for :py:meth:`.HailContext.import_table`.
 
         :param table: Key table.
@@ -822,10 +820,10 @@ class VariantDataset(object):
 
         :param expr: Annotation expression. (This or ``root`` required).
         :type expr: str or None
-        
+
         :param vds_key: Join key for the dataset. Much slower than default joins.
         :type vds_key: str, list of str, or None.
-        
+
         :param bool product: Join with all matching keys (see note).
 
         :return: Annotated variant dataset.
@@ -917,7 +915,7 @@ class VariantDataset(object):
         """Mark this variant dataset to be cached in memory.
 
         :py:meth:`~hail.VariantDataset.cache` is the same as :func:`persist("MEMORY_ONLY") <hail.VariantDataset.persist>`.
-        
+
         :rtype: :class:`.VariantDataset`
         """
 
@@ -932,22 +930,22 @@ class VariantDataset(object):
         .. include:: requireTGenotype.rst
 
         **Example**
-        
+
         >>> comparison_vds = hc.read('data/example2.vds')
         >>> summary, samples, variants = vds.concordance(comparison_vds)
 
         **Notes**
 
-        This method computes the genotype call concordance between two bialellic variant datasets. 
+        This method computes the genotype call concordance between two bialellic variant datasets.
         It performs an inner join on samples (only samples in both datasets will be considered), and an outer join
         on variants. If a variant is only in one dataset, then each genotype is treated as "no data" in the other.
         This method returns a tuple of three objects: a nested list of list of int with global concordance
-        summary statistics, a key table with sample concordance statistics, and a key table with variant concordance 
+        summary statistics, a key table with sample concordance statistics, and a key table with variant concordance
         statistics.
-        
+
         **Using the global summary result**
-        
-        The global summary is a list of list of int (conceptually a 5 by 5 matrix), 
+
+        The global summary is a list of list of int (conceptually a 5 by 5 matrix),
         where the indices have special meaning:
 
         0. No Data (missing variant)
@@ -955,48 +953,48 @@ class VariantDataset(object):
         2. Hom Ref
         3. Heterozygous
         4. Hom Var
-        
+
         The first index is the state in the left dataset (the one on which concordance was called), and the second
-        index is the state in the right dataset (the argument to the concordance method call). Typical uses of 
+        index is the state in the right dataset (the argument to the concordance method call). Typical uses of
         the summary list are shown below.
-          
+
         >>> summary, samples, variants = vds.concordance(hc.read('data/example2.vds'))
         >>> left_homref_right_homvar = summary[2][4]
         >>> left_het_right_missing = summary[3][1]
         >>> left_het_right_something_else = sum(summary[3][:]) - summary[3][3]
         >>> total_concordant = summary[2][2] + summary[3][3] + summary[4][4]
         >>> total_discordant = sum([sum(s[2:]) for s in summary[2:]]) - total_concordant
-        
+
         **Using the key table results**
-        
+
         Columns of the sample key table:
-        
+
            - **s** (*String*) -- Sample ID, key column.
            - **nDiscordant** (*Long*) -- Count of discordant calls (see below for full definition).
            - **concordance** (*Array[Array[Long]]*) -- Array of concordance per state on left and right,
              matching the structure of the global summary defined above.
-             
+
         Columns of the variant key table:
-        
+
            - **v** (*Variant*) -- Key column.
            - **nDiscordant** (*Long*) -- Count of discordant calls (see below for full definition).
            - **concordance** (*Array[Array[Long]]*) -- Array of concordance per state on left and right,
              matches the structure of the global summary defined above.
-             
-        The two key tables produced by the concordance method can be queried with :py:meth:`.KeyTable.query`, 
+
+        The two key tables produced by the concordance method can be queried with :py:meth:`.KeyTable.query`,
         exported to text with :py:meth:`.KeyTable.export`, and used to annotate a variant dataset with
         :py:meth:`.VariantDataset.annotate_variants_table`, among other things.
-        
+
         In these tables, the column **nDiscordant** is provided as a convenience, because this is often one
-        of the most useful concordance statistics. This value is the number of genotypes 
-        which were called (homozygous reference, heterozygous, or homozygous variant) in both datasets, 
+        of the most useful concordance statistics. This value is the number of genotypes
+        which were called (homozygous reference, heterozygous, or homozygous variant) in both datasets,
         but where the call did not match between the two.
-        
+
         The column **concordance** matches the structure of the global summmary, which is detailed above. Once again,
         the first index into this array is the state on the left, and the second index is the state on the right.
-        For example, ``concordance[1][4]`` is the number of "no call" genotypes on the left that were called 
-        homozygous variant on the right. 
-        
+        For example, ``concordance[1][4]`` is the number of "no call" genotypes on the left that were called
+        homozygous variant on the right.
+
         :param right: right hand variant dataset for concordance
         :type right: :class:`.VariantDataset`
 
@@ -1016,15 +1014,15 @@ class VariantDataset(object):
     @handle_py4j
     def count(self):
         """Returns number of samples and variants in the dataset.
-        
+
         **Examples**
-        
+
         >>> samples, variants = vds.count()
-        
+
         **Notes**
-        
+
         This is also the fastest way to force evaluation of a Hail pipeline.
-        
+
         :returns: The sample and variant counts.
         :rtype: (int, int)
         """
@@ -1048,13 +1046,13 @@ class VariantDataset(object):
                       seed=integral)
     def sample_variants(self, fraction, seed=1):
         """Downsample variants to a given fraction of the dataset.
-        
+
         **Examples**
-        
+
         >>> small_vds = vds.sample_variants(0.01)
-        
+
         **Notes**
-        
+
         This method may not sample exactly ``(fraction * n_variants)``
         variants from the dataset.
 
@@ -1567,7 +1565,7 @@ class VariantDataset(object):
         - ``va``: variant annotations
         - ``aIndices`` (*Array[Int]*): the array of old indices (such that ``aIndices[newIndex] = oldIndex`` and ``aIndices[0] = 0``)
 
-        :param str expr: Boolean filter expression involving v (variant), va (variant annotations), 
+        :param str expr: Boolean filter expression involving v (variant), va (variant annotations),
             and aIndex (allele index)
 
         :param str annotation: Annotation modifying expression involving v (new variant), va (old variant annotations),
@@ -1627,7 +1625,7 @@ class VariantDataset(object):
             When ``expr`` evaluates to missing, the genotype will be removed regardless of whether ``keep=True`` or ``keep=False``.
 
         :param str expr: Boolean filter expression.
-        
+
         :param bool keep: Keep genotypes where ``expr`` evaluates to true.
 
         :return: Filtered variant dataset.
@@ -1708,7 +1706,7 @@ class VariantDataset(object):
 
 
         :param str expr: Boolean filter expression.
-        
+
         :param bool keep: Keep samples where ``expr`` evaluates to true.
 
         :return: Filtered variant dataset.
@@ -1723,22 +1721,22 @@ class VariantDataset(object):
                       keep=bool)
     def filter_samples_list(self, samples, keep=True):
         """Filter samples with a list of samples.
-    
+
         **Examples**
-    
+
         >>> to_remove = ['NA12878', 'NA12891', 'NA12892']
         >>> vds_result = vds.filter_samples_list(to_remove, keep=False)
-        
+
         Read list from a file:
-        
+
         >>> to_remove = [s.strip() for s in open('data/exclude_samples.txt')]
         >>> vds_result = vds.filter_samples_list(to_remove, keep=False)
-    
+
         :param samples: List of samples to keep or remove.
         :type samples: list of str
 
         :param bool keep: If true, keep samples in ``samples``, otherwise remove them.
-    
+
         :return: Filtered variant dataset.
         :rtype: :py:class:`.VariantDataset`
         """
@@ -1750,28 +1748,28 @@ class VariantDataset(object):
                       keep=bool)
     def filter_samples_table(self, table, keep=True):
         """Filter samples with a table keyed by sample ID.
-        
+
         **Examples**
-        
+
         Keep samples in a text file:
-        
+
         >>> table = hc.import_table('data/samples1.tsv').key_by('Sample')
         >>> vds_filtered = vds.filter_samples_table(table, keep=True)
-        
+
         Remove samples in a text file with 1 field, and no header:
         >>> to_remove = hc.import_table('data/exclude_samples.txt', no_header=True).key_by('f0')
         >>> vds_filtered = vds.filter_samples_table(to_remove, keep=False)
-        
+
         **Notes**
-        
-        This method filters out or filters to the keys of a table. The table must have a key of 
-        type ``String``. 
-        
+
+        This method filters out or filters to the keys of a table. The table must have a key of
+        type ``String``.
+
         :param table: Key table.
         :type table: :class:`.KeyTable`
-        
+
         :param bool keep: If true, keep only the keys in ``table``, otherwise remove them.
-        
+
         :return: Filtered dataset.
         :rtype: :class:`.VariantDataset`
         """
@@ -1833,7 +1831,7 @@ class VariantDataset(object):
         :param str expr: Boolean filter expression.
 
         :param bool keep: Keep variants where ``expr`` evaluates to true.
-        
+
         :return: Filtered variant dataset.
         :rtype: :py:class:`.VariantDataset`
         """
@@ -1850,24 +1848,24 @@ class VariantDataset(object):
         **Examples**
 
         Filter to one interval:
-        
+
         >>> vds_result = vds.filter_intervals(Interval.parse('17:38449840-38530994'))
-        
+
         Another way of writing this same query:
-        
+
         >>> vds_result = vds.filter_intervals(Interval(Locus('17', 38449840), Locus('17', 38530994)))
-        
+
         Two identical ways of parsing a list of intervals:
-        
+
         >>> intervals = map(Interval.parse, ['1:50M-75M', '2:START-400000', '3-22'])
         >>> intervals = [Interval.parse(x) for x in ['1:50M-75M', '2:START-400000', '3-22']]
-        
+
         Use this interval list to filter:
-        
+
         >>> vds_result = vds.filter_intervals(intervals)
-        
+
         **Notes**
-        
+
         This method takes an argument of :class:`.Interval` or list of :class:`.Interval`.
 
         Based on the ``keep`` argument, this method will either restrict to variants in the
@@ -1880,14 +1878,14 @@ class VariantDataset(object):
         This method performs predicate pushdown when ``keep=True``, meaning that data shards
         that don't overlap any supplied interval will not be loaded at all.  This property
         enables ``filter_intervals`` to be used for reasonably low-latency queries of small ranges
-        of the genome, even on large datasets. Suppose we are interested in variants on 
+        of the genome, even on large datasets. Suppose we are interested in variants on
         chromosome 15 between 100000 and 200000. This implementation with :py:meth:`.filter_variants_expr`
         may come to mind first:
-        
+
         >>> vds_filtered = vds.filter_variants_expr('v.contig == "15" && v.start >= 100000 && v.start < 200000')
-        
+
         However, it is **much** faster (and easier!) to use this method:
-        
+
         >>> vds_filtered = vds.filter_intervals(Interval.parse('15:100000-200000'))
 
         :param intervals: interval or list of intervals
@@ -1912,17 +1910,17 @@ class VariantDataset(object):
 
         Filter VDS down to a list of variants:
 
-        >>> vds_filtered = vds.filter_variants_list([Variant.parse('20:10626633:G:GC'), 
+        >>> vds_filtered = vds.filter_variants_list([Variant.parse('20:10626633:G:GC'),
         ...                                          Variant.parse('20:10019093:A:G')], keep=True)
-        
+
         **Notes**
 
 
         This method performs predicate pushdown when ``keep=True``, meaning that data shards
         that don't overlap with any supplied variant will not be loaded at all.  This property
         enables ``filter_variants_list`` to be used for reasonably low-latency queries of one
-        or more variants, even on large datasets. 
-        
+        or more variants, even on large datasets.
+
         :param variants: List of variants to keep or remove.
         :type variants: list of :py:class:`~hail.representation.Variant`
 
@@ -1948,34 +1946,34 @@ class VariantDataset(object):
 
         >>> kt = hc.import_table('data/sample_variants.txt', key='Variant', impute=True)
         >>> filtered_vds = vds.filter_variants_table(kt, keep=True)
-        
-        Keep all variants whose chromosome and position (locus) appear in a file with 
+
+        Keep all variants whose chromosome and position (locus) appear in a file with
         a chromosome:position column:
-        
+
         >>> kt = hc.import_table('data/locus-table.tsv', impute=True).key_by('Locus')
         >>> filtered_vds = vds.filter_variants_table(kt, keep=True)
-        
+
         Remove all variants which overlap an interval in a UCSC BED file:
-        
+
         >>> kt = KeyTable.import_bed('data/file2.bed')
         >>> filtered_vds = vds.filter_variants_table(kt, keep=False)
-        
+
         **Notes**
-        
+
         This method takes a key table as an argument, which must be keyed by one of the following:
-        
+
             - ``Interval``
             - ``Locus``
             - ``Variant``
-            
+
         If the key is a ``Variant``, then a variant in the dataset will be kept or removed based
-        on finding a complete match in the table. Be careful, however: ``1:1:A:T`` does not match 
-        ``1:1:A:T,C``, and vice versa. 
-        
-        If the key is a ``Locus``, then a variant in the dataset will be kept or removed based on 
+        on finding a complete match in the table. Be careful, however: ``1:1:A:T`` does not match
+        ``1:1:A:T,C``, and vice versa.
+
+        If the key is a ``Locus``, then a variant in the dataset will be kept or removed based on
         finding a locus in the table that matches by chromosome and position.
-        
-        If the key is an ``Interval``, then a variant in the dataset will be kept or removed based 
+
+        If the key is an ``Interval``, then a variant in the dataset will be kept or removed based
         on finding an interval in the table that contains the variant's chromosome and position.
 
         :param table: Key table object.
@@ -2011,11 +2009,11 @@ class VariantDataset(object):
         .. include:: requireTGenotype.rst
 
         **Examples**
-        
+
         >>> km = vds.grm()
-        
+
         **Notes**
-        
+
         The genetic relationship matrix (GRM) :math:`G` encodes genetic correlation between each pair of samples. It is defined by :math:`G = MM^T` where :math:`M` is a standardized version of the genotype matrix, computed as follows. Let :math:`C` be the :math:`n \\times m` matrix of raw genotypes in the variant dataset, with rows indexed by :math:`n` samples and columns indexed by :math:`m` bialellic autosomal variants; :math:`C_{ij}` is the number of alternate alleles of variant :math:`j` carried by sample :math:`i`, which can be 0, 1, 2, or missing. For each variant :math:`j`, the sample alternate allele frequency :math:`p_j` is computed as half the mean of the non-missing entries of column :math:`j`. Entries of :math:`M` are then mean-centered and variance-normalized as
 
         .. math::
@@ -2023,11 +2021,11 @@ class VariantDataset(object):
           M_{ij} = \\frac{C_{ij}-2p_j}{\sqrt{2p_j(1-p_j)m}},
 
         with :math:`M_{ij} = 0` for :math:`C_{ij}` missing (i.e. mean genotype imputation). This scaling normalizes genotype variances to a common value :math:`1/m` for variants in Hardy-Weinberg equilibrium and is further motivated in the paper `Patterson, Price and Reich, 2006 <http://journals.plos.org/plosgenetics/article?id=10.1371/journal.pgen.0020190>`__. (The resulting amplification of signal from the low end of the allele frequency spectrum will also introduce noise for rare variants; common practice is to filter out variants with minor allele frequency below some cutoff.)  The factor :math:`1/m` gives each sample row approximately unit total variance (assuming linkage equilibrium) so that the diagonal entries of the GRM are approximately 1. Equivalently,
-        
+
         .. math::
 
-          G_{ik} = \\frac{1}{m} \\sum_{j=1}^m \\frac{(C_{ij}-2p_j)(C_{kj}-2p_j)}{2 p_j (1-p_j)}  
-                
+          G_{ik} = \\frac{1}{m} \\sum_{j=1}^m \\frac{(C_{ij}-2p_j)(C_{kj}-2p_j)}{2 p_j (1-p_j)}
+
         :return: Genetic Relatedness Matrix for all samples.
         :rtype: :py:class:`KinshipMatrix`
         """
@@ -2141,12 +2139,12 @@ class VariantDataset(object):
         .. include:: requireTGenotype.rst
 
         **Examples**
-        
+
         Prune samples so that no two have a PI_HAT value greater than or equal to 0.6.
-        
+
         >>> pruned_vds = vds.ibd_prune(0.6)
 
-        Prune samples so that no two have a PI_HAT value greater than or equal to 0.5, with a tiebreaking expression that 
+        Prune samples so that no two have a PI_HAT value greater than or equal to 0.5, with a tiebreaking expression that
         selects cases over controls:
 
         >>> pruned_vds = vds.ibd_prune(0.5, tiebreaking_expr="if (sa1.isCase) 1 else 0")
@@ -2156,15 +2154,15 @@ class VariantDataset(object):
         The variant dataset returned may change in near future as a result of algorithmic improvements. The current algorithm is very efficient on datasets with many small
         families, less so on datasets with large families. Currently, the algorithm works by deleting the person from each family who has the highest number of relatives,
         and iterating until no two people have a PI_HAT value greater than that specified. If two people within a family have the same number of relatives, the tiebreaking_expr
-        given will be used to determine which sample gets deleted. 
-        
+        given will be used to determine which sample gets deleted.
+
         The tiebreaking_expr namespace has the following variables available:
-        
+
         - ``s1``: The first sample id.
         - ``sa1``: The annotations associated with s1.
-        - ``s2``: The second sample id. 
-        - ``sa2``: The annotations associated with s2. 
-        
+        - ``s2``: The second sample id.
+        - ``sa2``: The annotations associated with s2.
+
         The tiebreaking_expr returns an integer expressing the preference for one sample over the other. Any negative integer expresses a preference for keeping ``s1``. Any positive integer expresses a preference for keeping ``s2``. A zero expresses no preference. This function must induce a `preorder <https://en.wikipedia.org/wiki/Preorder>`__ on the samples, in particular:
 
         - ``tiebreaking_expr(sample1, sample2)`` must equal ``-1 * tie breaking_expr(sample2, sample1)``, which evokes the common sense understanding that if ``x < y`` then `y > x``.
@@ -2174,10 +2172,10 @@ class VariantDataset(object):
         The last requirement is only important if you have three related samples with the same number of relatives and all three are related to one another. In cases like this one, it is important that either:
 
         - one of the three is preferred to **both** other ones, or
-        - there is no preference among the three samples 
+        - there is no preference among the three samples
 
         :param threshold: The desired maximum PI_HAT value between any pair of samples.
-        :param tiebreaking_expr: Expression used to choose between two samples with the same number of relatives. 
+        :param tiebreaking_expr: Expression used to choose between two samples with the same number of relatives.
         :param maf: Expression for the minor allele frequency.
         :param bounded: Forces the estimations for Z0, Z1, Z2, and PI_HAT to take on biologically meaningful values (in the range [0,1]).
 
@@ -2352,22 +2350,22 @@ class VariantDataset(object):
     @requireTGenotype
     def ld_matrix(self):
         """Computes the linkage disequilibrium (correlation) matrix for the variants in this VDS.
-        
+
         **Examples**
-        
+
         >>> ld_mat = vds.ld_matrix()
-        
+
         **Notes**
-        
-        Each entry (i, j) in the LD matrix gives the :math:`r` value between variants i and j, defined as 
-        `Pearson's correlation coefficient <https://en.wikipedia.org/wiki/Pearson_correlation_coefficient>`__ 
+
+        Each entry (i, j) in the LD matrix gives the :math:`r` value between variants i and j, defined as
+        `Pearson's correlation coefficient <https://en.wikipedia.org/wiki/Pearson_correlation_coefficient>`__
         :math:`\\rho_{x_i,x_j}` between the two genotype vectors :math:`x_i` and :math:`x_j`.
 
         .. math::
 
             \\rho_{x_i,x_j} = \\frac{\\mathrm{Cov}(X_i,X_j)}{\\sigma_{X_i} \\sigma_{X_j}}
-        
-        Also note that variants with zero variance (:math:`\\sigma = 0`) will be dropped from the matrix. 
+
+        Also note that variants with zero variance (:math:`\\sigma = 0`) will be dropped from the matrix.
 
         .. caution::
 
@@ -3208,7 +3206,8 @@ class VariantDataset(object):
         :rtype: (:py:class:`.KeyTable`, :py:class:`.KeyTable`)
         """
 
-        r = self._jvdf.logregBurden(key_name, variant_keys, single_key, agg_expr, test, y, jarray(Env.jvm().java.lang.String, covariates))
+        r = self._jvdf.logregBurden(key_name, variant_keys, single_key, agg_expr, test, y,
+                                    jarray(Env.jvm().java.lang.String, covariates))
         logreg_kt = KeyTable(self.hc, r._1())
         sample_kt = KeyTable(self.hc, r._2())
 
@@ -3230,79 +3229,79 @@ class VariantDataset(object):
 
         >>> ped = Pedigree.read('data/trios.fam')
         >>> all, per_fam, per_sample, per_variant = vds.mendel_errors(ped)
-        
+
         Export all mendel errors to a text file:
-        
+
         >>> all.export('output/all_mendel_errors.tsv')
 
         Annotate samples with the number of Mendel errors:
-        
+
         >>> annotated_vds = vds.annotate_samples_table(per_sample, root="sa.mendel")
-        
+
         Annotate variants with the number of Mendel errors:
-        
+
         >>> annotated_vds = vds.annotate_variants_table(per_variant, root="va.mendel")
-        
+
         **Notes**
 
         The example above returns four tables, which contain Mendelian violations grouped in
-        various ways. These tables are modeled after the 
+        various ways. These tables are modeled after the
         `PLINK mendel formats <https://www.cog-genomics.org/plink2/formats#mendel>`_. The four
         tables contain the following columns:
-        
+
         **First table:** all Mendel errors. This table contains one row per Mendel error in the dataset;
         it is possible that a variant or sample may be found on more than one row. This table closely
         reflects the structure of the ".mendel" PLINK format detailed below.
-        
+
         Columns:
-        
+
             - **fid** (*String*) -- Family ID.
             - **s** (*String*) -- Proband ID.
             - **v** (*Variant*) -- Variant in which the error was found.
-            - **code** (*Int*) -- Mendel error code, see below. 
+            - **code** (*Int*) -- Mendel error code, see below.
             - **error** (*String*) -- Readable representation of Mendel error.
-        
+
         **Second table:** errors per nuclear family. This table contains one row per nuclear family in the dataset.
-        This table closely reflects the structure of the ".fmendel" PLINK format detailed below. 
-        
+        This table closely reflects the structure of the ".fmendel" PLINK format detailed below.
+
         Columns:
-        
+
             - **fid** (*String*) -- Family ID.
             - **father** (*String*) -- Paternal ID.
             - **mother** (*String*) -- Maternal ID.
             - **nChildren** (*Int*) -- Number of children in this nuclear family.
             - **nErrors** (*Int*) -- Number of Mendel errors in this nuclear family.
             - **nSNP** (*Int*) -- Number of Mendel errors at SNPs in this nuclear family.
-        
-        **Third table:** errors per individual. This table contains one row per individual in the dataset, 
-        including founders. This table closely reflects the structure of the ".imendel" PLINK format detailed 
+
+        **Third table:** errors per individual. This table contains one row per individual in the dataset,
+        including founders. This table closely reflects the structure of the ".imendel" PLINK format detailed
         below.
-        
+
         Columns:
-        
+
             - **s** (*String*) -- Sample ID (key column).
             - **fid** (*String*) -- Family ID.
             - **nErrors** (*Int*) -- Number of Mendel errors found involving this individual.
             - **nSNP** (*Int*) -- Number of Mendel errors found involving this individual at SNPs.
             - **error** (*String*) -- Readable representation of Mendel error.
-        
+
         **Fourth table:** errors per variant. This table contains one row per variant in the dataset.
-        
+
         Columns:
-        
+
             - **v** (*Variant*) -- Variant (key column).
             - **nErrors** (*Int*) -- Number of Mendel errors in this variant.
-        
+
         **PLINK Mendel error formats:**
 
             - ``*.mendel`` -- all mendel errors: FID KID CHR SNP CODE ERROR
             - ``*.fmendel`` -- error count per nuclear family: FID PAT MAT CHLD N
             - ``*.imendel`` -- error count per individual: FID IID N
             - ``*.lmendel`` -- error count per variant: CHR SNP N
-        
+
         In the PLINK formats, **FID**, **KID**, **PAT**, **MAT**, and **IID** refer to family, kid,
-        dad, mom, and individual ID, respectively, with missing values set to ``0``. SNP denotes 
-        the variant identifier ``chr:pos:ref:alt``. N is the error count. CHLD is the number of 
+        dad, mom, and individual ID, respectively, with missing values set to ``0``. SNP denotes
+        the variant identifier ``chr:pos:ref:alt``. N is the error count. CHLD is the number of
         children in a nuclear family.
 
         The CODE of each Mendel error is determined by the table below,
@@ -3507,33 +3506,33 @@ class VariantDataset(object):
 
         **Notes**
 
-        The :py:meth:`~hail.VariantDataset.persist` and :py:meth:`~hail.VariantDataset.cache` methods 
-        allow you to store the current dataset on disk or in memory to avoid redundant computation and 
+        The :py:meth:`~hail.VariantDataset.persist` and :py:meth:`~hail.VariantDataset.cache` methods
+        allow you to store the current dataset on disk or in memory to avoid redundant computation and
         improve the performance of Hail pipelines.
 
-        :py:meth:`~hail.VariantDataset.cache` is an alias for 
+        :py:meth:`~hail.VariantDataset.cache` is an alias for
         :func:`persist("MEMORY_ONLY") <hail.VariantDataset.persist>`.  Most users will want "MEMORY_AND_DISK".
-        See the `Spark documentation <http://spark.apache.org/docs/latest/programming-guide.html#rdd-persistence>`__ 
+        See the `Spark documentation <http://spark.apache.org/docs/latest/programming-guide.html#rdd-persistence>`__
         for a more in-depth discussion of persisting data.
-        
+
         .. warning ::
-            
+
             Persist, like all other :class:`.VariantDataset` functions, is functional.
             Its output must be captured. This is wrong:
-            
+
             >>> vds = vds.linreg('sa.phenotype') # doctest: +SKIP
             >>> vds.persist() # doctest: +SKIP
-            
-            The above code does NOT persist ``vds``. Instead, it copies ``vds`` and persists that result. 
+
+            The above code does NOT persist ``vds``. Instead, it copies ``vds`` and persists that result.
             The proper usage is this:
-            
+
             >>> vds = vds.pca().persist() # doctest: +SKIP
 
         :param storage_level: Storage level.  One of: NONE, DISK_ONLY,
             DISK_ONLY_2, MEMORY_ONLY, MEMORY_ONLY_2, MEMORY_ONLY_SER,
             MEMORY_ONLY_SER_2, MEMORY_AND_DISK, MEMORY_AND_DISK_2,
             MEMORY_AND_DISK_SER, MEMORY_AND_DISK_SER_2, OFF_HEAP
-            
+
         :rtype: :class:`.VariantDataset`
         """
 
@@ -3542,14 +3541,14 @@ class VariantDataset(object):
     def unpersist(self):
         """
         Unpersists this VDS from memory/disk.
-        
+
         **Notes**
         This function will have no effect on a VDS that was not previously persisted.
-        
+
         There's nothing stopping you from continuing to use a VDS that has been unpersisted, but doing so will result in
         all previous steps taken to compute the VDS being performed again since the VDS must be recomputed. Only unpersist
         a VDS when you are done with it.
-         
+
         """
         self._jvds.unpersist()
 
@@ -3982,7 +3981,7 @@ class VariantDataset(object):
 
         **Annotations**
 
-        :py:meth:`~hail.VariantDataset.sample_qc` computes 20 sample statistics from the 
+        :py:meth:`~hail.VariantDataset.sample_qc` computes 20 sample statistics from the
         genotype data and stores the results as sample annotations that can be accessed with
         ``sa.qc.<identifier>`` (or ``<root>.<identifier>`` if a non-default root was passed):
 
@@ -4034,7 +4033,7 @@ class VariantDataset(object):
 
         :param str root: Sample annotation root for the computed struct.
         :param bool keep_star: Count star alleles as non-reference alleles
-        
+
         :return: Annotated variant dataset with new sample qc annotations.
         :rtype: :class:`.VariantDataset`
         """
@@ -4058,19 +4057,19 @@ class VariantDataset(object):
     @requireTGenotype
     def summarize(self):
         """Returns a summary of useful information about the dataset.
-        
+
         .. include:: requireTGenotype.rst
 
-        
+
         **Examples**
-        
+
         >>> s = vds.summarize()
         >>> print(s.contigs)
         >>> print('call rate is %.2f' % s.call_rate)
         >>> s.report()
-        
+
         The following information is contained in the summary:
-        
+
          - **samples** (*int*) - Number of samples.
          - **variants** (*int*) - Number of variants.
          - **call_rate** (*float*) - Fraction of all genotypes called.
@@ -4083,7 +4082,7 @@ class VariantDataset(object):
          - **complex** (*int*) - Number of complex alternate alleles.
          - **star** (*int*) - Number of star (upstream deletion) alternate alleles.
          - **max_alleles** (*int*) - The highest number of alleles at any variant.
-         
+
         :return: Object containing summary information.
         :rtype: :class:`~hail.utils.Summary`
         """
@@ -4476,8 +4475,8 @@ class VariantDataset(object):
 
         **Annotations**
 
-        :py:meth:`~hail.VariantDataset.variant_qc` computes 18 variant statistics from the 
-        genotype data and stores the results as variant annotations that can be accessed 
+        :py:meth:`~hail.VariantDataset.variant_qc` computes 18 variant statistics from the
+        genotype data and stores the results as variant annotations that can be accessed
         with ``va.qc.<identifier>`` (or ``<root>.<identifier>`` if a non-default root was passed):
 
         +---------------------------+--------+--------------------------------------------------------+
@@ -4520,7 +4519,7 @@ class VariantDataset(object):
         | ``gqStDev``               | Double | Genotype quality standard deviation across all samples |
         +---------------------------+--------+--------------------------------------------------------+
 
-        Missing values ``NA`` may result (for example, due to division by zero) and are handled properly 
+        Missing values ``NA`` may result (for example, due to division by zero) and are handled properly
         in filtering and written as "NA" in export modules. The empirical standard deviation is computed
         with zero degrees of freedom.
 
@@ -4842,7 +4841,7 @@ class VariantDataset(object):
         """Produce a key with one row per variant and one or more columns per sample.
 
         **Examples**
-        
+
         >>> kt = vds.make_table('v = v', ['gt = g.gt', 'gq = g.gq'])
 
         **Notes**

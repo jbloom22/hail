@@ -1,6 +1,7 @@
 from hail.java import *
 from hail.typecheck import *
 
+
 class Genotype(object):
     """
     An object that represents an individual's genotype at a genomic locus.
@@ -53,7 +54,7 @@ class Genotype(object):
     def __repr__(self):
         fake_ref = 'FakeRef=True' if self._jrep.fakeRef() else ''
         if self._jrep.isLinearScale():
-            return 'Genotype(GT=%s, AD=%s, DP=%s, GQ=%s, GP=%s%s)' %\
+            return 'Genotype(GT=%s, AD=%s, DP=%s, GQ=%s, GP=%s%s)' % \
                    (self.gt, self.ad, self.dp, self.gq, self.gp(), fake_ref)
         else:
             return 'Genotype(GT=%s, AD=%s, DP=%s, GQ=%s, PL=%s%s)' % \
@@ -514,4 +515,3 @@ class Call(object):
         """
 
         return jiterable_to_list(self._jcall.oneHotGenotype(self._jrep, num_genotypes))
-    

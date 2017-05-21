@@ -1,10 +1,12 @@
 from pyspark.mllib.linalg.distributed import IndexedRowMatrix
 from hail.representation import Variant
 
+
 class LDMatrix:
     """
     Represents a symmetric matrix encoding the Pearson correlation between each pair of variants in the accompanying variant list.
     """
+
     def __init__(self, jldm):
         self._jldm = jldm
 

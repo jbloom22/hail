@@ -83,8 +83,6 @@ class ContextTests(unittest.TestCase):
         self.assertRaises(TypeError, lambda: good_signature_4(1, 2, a=2))
         self.assertRaises(TypeError, lambda: good_signature_4(1, 2, '3', b='5', c=10))
 
-
-
     def test_helpers(self):
         # check nullable
         @typecheck(x=nullable(int))

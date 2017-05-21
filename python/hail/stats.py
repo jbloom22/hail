@@ -1,16 +1,17 @@
 from hail.java import Env
 from hail.typecheck import *
 
+
 class BetaDist:
     """
     Represents a beta distribution with parameters a and b.
     """
+
     @typecheck_method(a=numeric,
                       b=numeric)
     def __init__(self, a, b):
         self.a = a
         self.b = b
-
 
     def _jrep(self):
         return Env.hail().stats.BetaDist.apply(float(self.a), float(self.b))
@@ -20,6 +21,7 @@ class UniformDist:
     """
     Represents a uniform distribution on the interval [minVal, maxVal].
     """
+
     @typecheck_method(minVal=numeric,
                       maxVal=numeric)
     def __init__(self, minVal, maxVal):
@@ -31,11 +33,13 @@ class UniformDist:
     def _jrep(self):
         return Env.hail().stats.UniformDist.apply(float(self.minVal), float(self.maxVal))
 
+
 class TruncatedBetaDist:
     """
     Represents a truncated beta distribution with parameters a and b and support [minVal, maxVal]. Draws are made
     via rejection sampling, which may be slow if the probability mass of Beta(a,b) over [minVal, maxVal] is small.
     """
+
     @typecheck_method(a=numeric,
                       b=numeric,
                       minVal=numeric,
@@ -54,4 +58,5 @@ class TruncatedBetaDist:
         self.b = b
 
     def _jrep(self):
-        return Env.hail().stats.TruncatedBetaDist.apply(float(self.a), float(self.b), float(self.minVal), float(self.maxVal))
+        return Env.hail().stats.TruncatedBetaDist.apply(float(self.a), float(self.b), float(self.minVal),
+                                                        float(self.maxVal))
