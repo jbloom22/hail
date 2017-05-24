@@ -1,34 +1,26 @@
 package is.hail.variant
 
-import java.io.FileNotFoundException
-
 import is.hail.HailContext
-import is.hail.annotations._
-import is.hail.expr._
 import is.hail.annotations.{Annotation, _}
-import is.hail.expr.{EvalContext, JSONAnnotationImpex, Parser, SparkAnnotationImpex, TAggregable, TString, TStruct, Type, _}
+import is.hail.expr.{EvalContext, Parser, SparkAnnotationImpex, TAggregable, TString, TStruct, Type, _}
 import is.hail.io.plink.ExportBedBimFam
 import is.hail.io.vcf.{BufferedLineIterator, ExportVCF}
 import is.hail.keytable.KeyTable
 import is.hail.methods._
-import is.hail.sparkextras.{OrderedPartitioner, OrderedRDD}
+import is.hail.rest.ServerLinreg
 import is.hail.stats.ComputeRRM
 import is.hail.utils._
 import is.hail.variant.Variant.orderedKey
-import org.apache.hadoop
-import org.apache.kudu.spark.kudu._
 import org.apache.kudu.spark.kudu.{KuduContext, _}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.types.{ArrayType, StringType, StructField, StructType}
 import org.apache.spark.storage.StorageLevel
-import org.json4s._
-import org.json4s.jackson.{JsonMethods, Serialization}
+import org.json4s.jackson.Serialization
 
 import scala.collection.mutable
 import scala.io.Source
 import scala.language.implicitConversions
-import scala.reflect.ClassTag
 
 object VariantDataset {
 
@@ -661,6 +653,13 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
 
   def sampleQC(root: String = "sa.qc", keepStar: Boolean = false): VariantDataset = SampleQC(vds, root, keepStar)
 
+  def serverLinreg(covariates: Array[String] = Array.empty[String],
+    port: Int = 8080, maxWidth: Int = 1000000, hardLimit: Int = 100000) {
+    requireSplit("server linear regression")
+    
+    ServerLinreg(vds, covariates, port, maxWidth, hardLimit)
+  }
+  
   def rrm(forceBlock: Boolean = false, forceGramian: Boolean = false): KinshipMatrix = {
     requireSplit("rrm")
     info(s"rrm: Computing Realized Relationship Matrix...")
