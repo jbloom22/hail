@@ -14,7 +14,7 @@ import org.broadinstitute.hail.variant.HardCallSet
 import org.hamcrest.Matchers._
 import org.hamcrest.core.AnyOf
 
-class T2DRunnable(sc: SparkContext, sqlContext: SQLContext) extends Runnable {
+class RestRunnable(sc: SparkContext, sqlContext: SQLContext) extends Runnable {
   var task: Server = _
 
   override def run() {
@@ -40,14 +40,14 @@ class T2DRunnable(sc: SparkContext, sqlContext: SQLContext) extends Runnable {
   }
 }
 
-class T2DServerSuite extends SparkSuite {
-  var r: T2DRunnable = _
+class RestSuite extends SparkSuite {
+  var r: RestRunnable = _
   var t: Thread = _
 
   @BeforeClass
   override def startSpark() = {
     super.startSpark()
-    r = new T2DRunnable(sc, sqlContext)
+    r = new RestRunnable(sc, sqlContext)
     t = new Thread(r)
     t.start()
 
