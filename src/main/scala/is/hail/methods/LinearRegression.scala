@@ -3,10 +3,12 @@ package is.hail.methods
 import breeze.linalg._
 import is.hail.annotations.Annotation
 import is.hail.expr._
+import is.hail.rest.{PhenotypeTable, RestStat}
 import is.hail.stats._
 import is.hail.utils._
 import is.hail.variant._
 import net.sourceforge.jdistlib.T
+import org.apache.spark.rdd.RDD
 
 object LinearRegression {
   val schema = TStruct(
@@ -72,4 +74,60 @@ object LinearRegression {
       newAnnotation
     }.copy(vaSignature = newVAS)
   }
+  
+  // FIXME: refactor with above
+  def restApply(vds: VariantDataset, phenoTable: PhenotypeTable, yName: String, covNames: Array[String], minMAC: Int, maxMAC: Int): RDD[RestStat] = {
+    require(vds.wasSplit)
+    require(minMAC >= 0 && maxMAC >= minMAC)
+    
+    val (y, cov, completeSamples) = RegressionUtils.getPhenoCovCompleteSamples(phenoTable, yName, covNames)
+    val sampleMask = vds.sampleIds.map(completeSamples.toSet).toArray
+
+    val n = y.size
+    val k = cov.cols
+    val d = n - k - 1
+
+    if (d < 1)
+      fatal(s"$n samples and $k ${ plural(k, "covariate") } including intercept implies $d degrees of freedom.")
+
+    // FIXME: Test this
+    val minAC = 1 max (minMAC min (2 * n - maxMAC))
+    val maxAC = (2 * n - 1) min (maxMAC min (2 * n - minMAC))
+    
+    info(s"Running linear regression on $n samples with $k ${ plural(k, "covariate") } including intercept...")
+
+    val Qt = qr.reduced.justQ(cov).t
+    val Qty = Qt * y
+
+    val sc = vds.sparkContext
+    val sampleMaskBc = sc.broadcast(sampleMask)
+    val yBc = sc.broadcast(y)
+    val QtBc = sc.broadcast(Qt)
+    val QtyBc = sc.broadcast(Qty)
+    val yypBc = sc.broadcast((y dot y) - (Qty dot Qty))
+    
+    vds.rdd.map{ case (v, va, gs) =>
+      val (x: SparseVector[Double], ac) = RegressionUtils.hardCallsWithAC(gs, n, sampleMaskBc.value)
+
+      val optPval =
+        if (ac >= minAC && ac <= maxAC) {
+          val qtx = QtBc.value * x
+          val xxp = (x dot x) - (qtx dot qtx)
+          val xyp = (x dot yBc.value) - (qtx dot QtyBc.value)
+
+          val b = xyp / xxp
+          val se = math.sqrt((yypBc.value / xxp - b * b) / d)
+          val t = b / se
+          val p = 2 * T.cumulative(-math.abs(t), d, true, false)
+
+          if (!p.isNaN)
+            Some(p)
+          else
+            None
+        }
+        else
+          None
+      
+      RestStat(v.contig, v.start, v.ref, v.alt, optPval)
+    }
 }

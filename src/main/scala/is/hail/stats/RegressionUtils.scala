@@ -3,6 +3,7 @@ package is.hail.stats
 import breeze.linalg._
 import is.hail.annotations.Annotation
 import is.hail.expr._
+import is.hail.rest.PhenotypeTable
 import is.hail.utils._
 import is.hail.variant.{Genotype, VariantDataset}
 import org.apache.spark.sql.Row
@@ -200,6 +201,11 @@ object RegressionUtils {
       (aQ().map(Option(_)), aToDouble).zipped.map(_.map(_))
     }
   }
+
+  def getPhenoCovCompleteSamples(
+    phenoTable: PhenotypeTable,
+    yName: String,
+    covNames: Array[String]): (DenseVector[Double], DenseMatrix[Double], IndexedSeq[Annotation]) = ???
 
   def getPhenoCovCompleteSamples(
     vds: VariantDataset,

@@ -1,11 +1,10 @@
-package org.broadinstitute.hail.rest
+package is.hail.rest
 
-import collection.mutable
-import org.apache.spark.sql.DataFrame
-import org.broadinstitute.hail.methods.LinearRegressionHcs
-import org.broadinstitute.hail.variant._
-import org.broadinstitute.hail.utils._
-import breeze.linalg.{DenseMatrix, DenseVector}
+import is.hail.methods.LinearRegression
+import is.hail.variant._
+import is.hail.utils._
+import is.hail.variant.VariantDataset
+import org.apache.spark.rdd.RDD
 import org.http4s.headers.`Content-Type`
 import org.http4s._
 import org.http4s.MediaType._
@@ -17,44 +16,12 @@ import org.json4s._
 import org.json4s.jackson.Serialization
 import org.json4s.jackson.Serialization.{read, write}
 
+import scala.collection.mutable
+
 case class VariantFilter(operand: String,
   operator: String,
   value: String,
-  operand_type: String) {
-
-  def filterDf(df: DataFrame, blockWidth: Int): DataFrame = {
-    operand match {
-      case "chrom" =>
-        df.filter(df("contig") === "chr" + value)
-      case "pos" =>
-        var v = 0
-        try
-          v = value.toInt // FIXME: should I be catching this? Otherwise, error message given 1.5 is just "For input string: \"1.5\"
-        catch {
-          case e: Exception => throw new RestFailure(s"Value of position in variant_filter must be an integer: got $value")
-        }
-        val vblock = v / blockWidth
-        operator match {
-          case "eq" =>
-            df.filter(df("block") === vblock)
-              .filter(df("start") === v)
-          case "gte" =>
-            df.filter(df("block") >= vblock)
-              .filter(df("start") >= v)
-          case "gt" =>
-            df.filter(df("block") >= vblock)
-              .filter(df("start") > v)
-          case "lte" =>
-            df.filter(df("block") <= vblock)
-              .filter(df("start") <= v)
-          case "lt" =>
-            df.filter(df("block") <= vblock)
-              .filter(df("start") < v)
-        }
-    }
-  }
-}
-
+  operand_type: String)
 
 case class Covariate(`type`: String,
   name: Option[String],
@@ -73,22 +40,23 @@ case class GetStatsRequest(passback: Option[String],
   count: Option[Boolean],
   sort_by: Option[Array[String]])
 
-case class Stat(chrom: String,
+case class RestStat(chrom: String,
   pos: Int,
   ref: String,
   alt: String,
-  `p-value`: Option[Double])
+  `p-value`: Option[Double]) // FIXME: rename pval
 
 case class GetStatsResult(is_error: Boolean,
   error_message: Option[String],
   passback: Option[String],
-  stats: Option[Array[Stat]],
+  stats: Option[Array[RestStat]],
   nsamples: Option[Int],
   count: Option[Int])
 
 class RestFailure(message: String) extends Exception(message)
 
-class RestService(hcs: HardCallSet, covMap: Map[String, IndexedSeq[Option[Double]]], defaultMinMAC: Int = 0, maxWidth: Int = 600000, hardLimit: Int = 100000) {
+class RestService(vds: VariantDataset, phenoTable: PhenotypeTable, maxWidth: Int, hardLimit: Int) {
+  val availablePhenotypes: Set[String] = phenoTable.phenotypes.toSet  
 
   def getStats(req: GetStatsRequest): GetStatsResult = {
     req.md_version.foreach { md_version =>
@@ -99,88 +67,62 @@ class RestService(hcs: HardCallSet, covMap: Map[String, IndexedSeq[Option[Double
     if (req.api_version != 1)
       throw new RestFailure(s"Unsupported API version `${req.api_version}'. Supported API versions: 1")
 
-    val pheno = req.phenotype.getOrElse("T2D")
-    val phenoCovs = mutable.Set[String]()
-    val variantCovs = new mutable.ArrayBuffer[Variant]()
-
+    // check pheno and covs
+    val yName = req.phenotype.getOrElse("T2D") // FIXME: remove default, change spec
+    val covNamesSet = mutable.Set[String]()
+    val covVariantsSet = mutable.Set[Variant]()
+    
     req.covariates.foreach { covariates =>
       for (c <- covariates)
         c.`type` match {
           case "phenotype" =>
             c.name match {
               case Some(name) =>
-                if (covMap.keySet(name))
-                  phenoCovs += name
+                if (availablePhenotypes(name))
+                  covNamesSet += name
                 else
-                  throw new RestFailure(s"$name is not a valid covariate name")
+                  throw new RestFailure(s"$name is not a valid phenotype")
               case None =>
                 throw new RestFailure("Covariate of type 'phenotype' must include 'name' field in request")
             }
           case "variant" =>
             (c.chrom, c.pos, c.ref, c.alt) match {
-              case (Some(chrom), Some(pos), Some(ref), Some(alt)) =>
-                variantCovs += Variant(chrom, pos, ref, alt)
+              case (Some(chr), Some(pos), Some(ref), Some(alt)) =>
+                covVariantsSet += Variant(chr, pos, ref, alt)
               case missingFields =>
                 throw new RestFailure("Covariate of type 'variant' must include 'chrom', 'pos', 'ref', and 'alt' fields in request")
             }
           case other =>
-            throw new RestFailure(s"Supported covariate types are phenotype and variant: got $other")
+            throw new RestFailure(s"Covariate type must be 'phenotype' or 'variant': got $other")
         }
     }
+    
+    if (covNamesSet(yName))
+      throw new RestFailure(s"$yName appears as both response phenotype and a covariate phenotype")
 
-    if (phenoCovs(pheno))
-      throw new RestFailure(s"$pheno appears as both the response phenotype and a covariate phenotype")
+    val covNames = covNamesSet.toArray
+    val covVariants = covVariantsSet.toArray
 
-    // FIXME: I'm not satisfied with next section
-
-    val reqCovMap = covMap.filterKeys(c => phenoCovs(c) || c == pheno)
-
-    val reqSampleFilter: Array[Boolean] = hcs.sampleIds.indices.map(si => reqCovMap.valuesIterator.forall(_(si).isDefined)).toArray
-
-    val n = hcs.nSamples
-
-    val reqSampleOriginalIndex: Array[Int] = (0 until n).filter(reqSampleFilter).toArray
-
-    val n0 = reqSampleOriginalIndex.size
-    if (n0 == 0)
-      throw new RestFailure("No samples in the intersection of given phenotype and covariates.")
-
-    val reduceSampleIndex: Array[Int] = Array.ofDim[Int](n)
-    (0 until n0).foreach(i => reduceSampleIndex(reqSampleOriginalIndex(i)) = i) // FIXME: Map is more natural than Array, but less efficient when using nearly all samples
-
-    val y: DenseVector[Double] =
-      covMap.get(pheno) match {
-        case Some(a) => DenseVector(reqSampleOriginalIndex.flatMap(a(_)))
-        case None => throw new RestFailure(s"$pheno is not a valid phenotype name")
-      }
-
-    val nCov = phenoCovs.size + variantCovs.size
-    val covArray = phenoCovs.toArray.flatMap(c => reqSampleOriginalIndex.flatMap(covMap(c)(_))) ++ variantCovs.toArray.flatMap(v => hcs.variantGts(v, n0, reqSampleFilter, reduceSampleIndex))
-    val cov: Option[DenseMatrix[Double]] =
-      if (nCov > 0)
-        Some(new DenseMatrix[Double](n0, nCov, covArray))
-      else
-        None
-
+    // check and construct variant filters
+    var chrom = ""
+    
     var minPos = 0
     var maxPos = Int.MaxValue // 2,147,483,647 is greater than length of longest chromosome
 
     var minMAC = 0
     var maxMAC = Int.MaxValue
 
-    val chromFilters = mutable.Set[VariantFilter]()
-    val posFilters = mutable.Set[VariantFilter]()
-    val macFilters = mutable.Set[VariantFilter]()
-
-    var isSingleVariant = false
-    var useDefaultMinMAC = true
-
     req.variant_filters.foreach(_.foreach { f =>
       f.operand match {
         case "chrom" =>
           if (!(f.operator == "eq" && f.operand_type == "string"))
             throw new RestFailure(s"chrom filter operator must be 'eq' and operand_type must be 'string': got '${f.operator}' and '${f.operand_type}'")
-          chromFilters += f
+          else if (f.value.isEmpty)
+            throw new RestFailure("chrom filter value cannot be the empty string")         
+          else if (chrom.isEmpty)
+            chrom = f.value
+          else if (chrom != f.value)
+            throw new RestFailure(s"Got incompatible chrom filters: '$chrom' and '${f.value}'")
         case "pos" =>
           if (f.operand_type != "integer")
             throw new RestFailure(s"pos filter operand_type must be 'integer': got '${f.operand_type}'")
@@ -189,11 +131,10 @@ class RestService(hcs: HardCallSet, covMap: Map[String, IndexedSeq[Option[Double
             case "gt" => minPos = minPos max (f.value.toInt + 1)
             case "lte" => maxPos = maxPos min f.value.toInt
             case "lt" => maxPos = maxPos min (f.value.toInt - 1)
-            case "eq" => isSingleVariant = true
+            case "eq" => minPos = f.value.toInt; maxPos = f.value.toInt
             case other =>
               throw new RestFailure(s"pos filter operator must be 'gte', 'gt', 'lte', 'lt', or 'eq': got '$other'")
           }
-          posFilters += f
         case "mac" =>
           if (f.operand_type != "integer")
             throw new RestFailure(s"mac filter operand_type must be 'integer': got '${f.operand_type}'")
@@ -205,35 +146,22 @@ class RestService(hcs: HardCallSet, covMap: Map[String, IndexedSeq[Option[Double
             case other =>
               throw new RestFailure(s"mac filter operator must be 'gte', 'gt', 'lte', 'lt': got '$other'")
           }
-          useDefaultMinMAC = false
         case other => throw new RestFailure(s"Filter operand must be 'chrom' or 'pos': got '$other'")
       }
     })
 
-    if (chromFilters.isEmpty)
+    if (chrom.isEmpty)
       throw new RestFailure("No chromosome specified in variant_filter")
-
-    val width =
-      if (isSingleVariant)
-        1
-      else
-        maxPos - minPos
-
+    
+    val width = maxPos - minPos
     if (width > maxWidth)
       throw new RestFailure(s"Interval length cannot exceed $maxWidth: got $width")
-
-    var df = hcs.df
-    val blockWidth = hcs.blockWidth
-
-    chromFilters.foreach(f => df = f.filterDf(df, blockWidth))
-    posFilters.foreach(f => df = f.filterDf(df, blockWidth))
-
-    if (useDefaultMinMAC)
-      minMAC = defaultMinMAC
-
-    val statsRDD = LinearRegressionHcs(hcs.copy(df = df), y, cov, reqSampleFilter, reduceSampleIndex, minMAC, maxMAC)
-      .rdd
-      .map { case (v, olrs) => Stat(v.contig, v.start, v.ref, v.alt, olrs.map(_.p)) }
+    
+    // Construct interval
+    
+    // Filter to interval
+    
+    val statsRDD: RDD[RestStat] = LinearRegression.restApply(vds, phenoTable, yName, covNames, minMAC, maxMAC)
 
     var stats =
       if (req.limit.isEmpty)
