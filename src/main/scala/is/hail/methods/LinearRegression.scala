@@ -76,10 +76,11 @@ object LinearRegression {
   }
   
   // FIXME: refactor with above
-  def restApply(vds: VariantDataset, phenoTable: PhenotypeTable, yName: String, covNames: Array[String], minMAC: Int, maxMAC: Int): RDD[RestStat] = {
+  def restApply(vds: VariantDataset, phenoTable: PhenotypeTable, yName: String, covNames: Array[String], 
+    minMAC: Int, maxMAC: Int): (RDD[RestStat], Int) = {
     require(vds.wasSplit)
     require(minMAC >= 0 && maxMAC >= minMAC)
-    
+
     val (y, cov, completeSamples) = RegressionUtils.getPhenoCovCompleteSamples(phenoTable, yName, covNames)
     val sampleMask = vds.sampleIds.map(completeSamples.toSet).toArray
 
@@ -93,7 +94,7 @@ object LinearRegression {
     // FIXME: Test this
     val minAC = 1 max (minMAC min (2 * n - maxMAC))
     val maxAC = (2 * n - 1) min (maxMAC min (2 * n - minMAC))
-    
+
     info(s"Running linear regression on $n samples with $k ${ plural(k, "covariate") } including intercept...")
 
     val Qt = qr.reduced.justQ(cov).t
@@ -105,8 +106,8 @@ object LinearRegression {
     val QtBc = sc.broadcast(Qt)
     val QtyBc = sc.broadcast(Qty)
     val yypBc = sc.broadcast((y dot y) - (Qty dot Qty))
-    
-    vds.rdd.map{ case (v, va, gs) =>
+
+    (vds.rdd.map { case (v, va, gs) =>
       val (x: SparseVector[Double], ac) = RegressionUtils.hardCallsWithAC(gs, n, sampleMaskBc.value)
 
       val optPval =
@@ -127,7 +128,8 @@ object LinearRegression {
         }
         else
           None
-      
+
       RestStat(v.contig, v.start, v.ref, v.alt, optPval)
-    }
+    }, n)
+  }
 }

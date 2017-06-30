@@ -157,29 +157,31 @@ class RestService(vds: VariantDataset, phenoTable: PhenotypeTable, maxWidth: Int
     if (width > maxWidth)
       throw new RestFailure(s"Interval length cannot exceed $maxWidth: got $width")
     
-    // Construct interval
+    val window = Interval(Locus(chrom, minPos), Locus(chrom, maxPos))
     
+    println(window)
     
-    // Filter to interval
+    val filteredVds = vds.filterIntervals(IntervalTree(Array(window)), keep = true)       
     
-    
-    val statsRDD: RDD[RestStat] = LinearRegression.restApply(vds, phenoTable, yName, covNames, minMAC, maxMAC)
+    val (restStatsRDD, nSamplesKept) = LinearRegression.restApply(filteredVds, phenoTable, yName, covNames, minMAC, maxMAC)
 
-    var stats =
+    var restStats =
       if (req.limit.isEmpty)
-        statsRDD.collect() // avoids first pass of take, modify if stats grows beyond memory capacity
+        restStatsRDD.collect() // avoids first pass of take, modify if stats grows beyond memory capacity
       else {
         val limit = req.limit.get
         if (limit < 0)
           throw new RestFailure(s"limit must be non-negative: got $limit")
-        statsRDD.take(limit)
+        restStatsRDD.take(limit)
       }
 
-    if (stats.size > hardLimit)
-      stats = stats.take(hardLimit)
-
+    if (restStats.size > hardLimit)
+      restStats = restStats.take(hardLimit)
+    
+    // FIXME: is standard sorting now preserved with OrderedRDD?
+    
     if (req.sort_by.isEmpty)
-      stats = stats.sortBy(s => (s.pos, s.ref, s.alt))
+      restStats = restStats.sortBy(s => (s.pos, s.ref, s.alt))
     else {
       val sortFields = req.sort_by.get
       if (! sortFields.areDistinct())
@@ -198,20 +200,20 @@ class RestService(vds: VariantDataset, phenoTable: PhenotypeTable, maxWidth: Int
       //      }
 
       sortFields.reverse.foreach { f =>
-        stats = f match {
-          case "pos" => stats.sortBy(_.pos)
-          case "ref" => stats.sortBy(_.ref)
-          case "alt" => stats.sortBy(_.alt)
-          case "p-value" => stats.sortBy(_.`p-value`.getOrElse(2d))
+        restStats = f match {
+          case "pos" => restStats.sortBy(_.pos)
+          case "ref" => restStats.sortBy(_.ref)
+          case "alt" => restStats.sortBy(_.alt)
+          case "p-value" => restStats.sortBy(_.`p-value`.getOrElse(2d))
           case _ => throw new RestFailure(s"Valid sort_by arguments are `pos', `ref', `alt', and `p-value': got $f")
         }
       }
     }
 
     if (req.count.getOrElse(false))
-      GetStatsResult(is_error = false, None, req.passback, None, Some(n0), Some(stats.size)) // FIXME: don't bother to compute when just returning count
+      GetStatsResult(is_error = false, None, req.passback, None, Some(nSamplesKept), Some(restStats.size)) // FIXME: don't bother to compute when just returning count
     else
-      GetStatsResult(is_error = false, None, req.passback, Some(stats), Some(n0), Some(stats.size))
+      GetStatsResult(is_error = false, None, req.passback, Some(restStats), Some(nSamplesKept), Some(restStats.size))
   }
 
   def service(implicit executionContext: ExecutionContext = ExecutionContext.global): HttpService = Router(
