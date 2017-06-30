@@ -1,4 +1,4 @@
-package org.broadinstitute.hail.rest
+package is.hail.rest
 
 import org.http4s.server.Server
 import org.http4s.server.blaze.BlazeBuilder
@@ -6,33 +6,30 @@ import org.testng.annotations.{AfterClass, BeforeClass, Test}
 import com.jayway.restassured.RestAssured._
 import com.jayway.restassured.config.JsonConfig
 import com.jayway.restassured.path.json.config.JsonPathConfig.NumberReturnType
-import org.apache.spark.SparkContext
-import org.apache.spark.sql.SQLContext
-import org.broadinstitute.hail.SparkSuite
-import org.broadinstitute.hail.driver.{ImportVCF, SplitMulti, State}
-import org.broadinstitute.hail.variant.HardCallSet
+import is.hail.{HailContext, SparkSuite}
 import org.hamcrest.Matchers._
+import _root_.is.hail.variant.VariantDataset
 import org.hamcrest.core.AnyOf
 
-class RestRunnable(sc: SparkContext, sqlContext: SQLContext) extends Runnable {
+class RestRunnable(hc: HailContext) extends Runnable {
   var task: Server = _
 
   override def run() {
 
-    var s = State(sc, sqlContext)
-    s = ImportVCF.run(s, Array("src/test/resources/t2dserver.vcf"))
-    s = SplitMulti.run(s)
-
-    val hcs = HardCallSet(sqlContext, s.vds, sparseCutoff = .6).repartition(2).sortByVariant() // FIXME: also test with sparseCutoff 0 and 2
-    val covMap = T2DServer.readCovData(s, "src/test/resources/t2dserver.cov", hcs.sampleIds)
-
-//    hcs.write(sqlContext, "src/test/resources/t2dserver100Kb.hcs")
-//    hcs.rdd.foreach(println)
-
-    val service = new T2DService(hcs, covMap)
+    val sampleKT = hc.importTable("src/test/resources/t2dserver.cov", keyNames = Array("Sample"))
+    
+    val covariates = sampleKT.fieldNames
+    
+    val vds: VariantDataset = hc.importVCF("src/test/resources/t2dserver.vcf")
+      .coalesce(2)
+      .annotateSamplesTable(sampleKT)
+    
+    val phenoTable = ???
+    
+    val restService = new RestService(vds, phenoTable, 600000, 100000)
 
     task = BlazeBuilder.bindHttp(8080)
-      .mountService(service.service, "/")
+      .mountService(restService.service, "/")
       .run
 
     task
@@ -47,7 +44,7 @@ class RestSuite extends SparkSuite {
   @BeforeClass
   override def startSpark() = {
     super.startSpark()
-    r = new RestRunnable(sc, sqlContext)
+    r = new RestRunnable(hc)
     t = new Thread(r)
     t.start()
 

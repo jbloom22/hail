@@ -4,7 +4,6 @@ import is.hail.methods.LinearRegression
 import is.hail.variant._
 import is.hail.utils._
 import is.hail.variant.VariantDataset
-import org.apache.spark.rdd.RDD
 import org.http4s.headers.`Content-Type`
 import org.http4s._
 import org.http4s.MediaType._
@@ -159,61 +158,64 @@ class RestService(vds: VariantDataset, phenoTable: PhenotypeTable, maxWidth: Int
     
     val window = Interval(Locus(chrom, minPos), Locus(chrom, maxPos))
     
-    println(window)
+    println(s"Using window: $window")
     
     val filteredVds = vds.filterIntervals(IntervalTree(Array(window)), keep = true)       
+    val onlyCount = req.count.getOrElse(false)
     
-    val (restStatsRDD, nSamplesKept) = LinearRegression.restApply(filteredVds, phenoTable, yName, covNames, minMAC, maxMAC)
-
-    var restStats =
-      if (req.limit.isEmpty)
-        restStatsRDD.collect() // avoids first pass of take, modify if stats grows beyond memory capacity
-      else {
-        val limit = req.limit.get
-        if (limit < 0)
-          throw new RestFailure(s"limit must be non-negative: got $limit")
-        restStatsRDD.take(limit)
-      }
-
-    if (restStats.size > hardLimit)
-      restStats = restStats.take(hardLimit)
-    
-    // FIXME: is standard sorting now preserved with OrderedRDD?
-    
-    if (req.sort_by.isEmpty)
-      restStats = restStats.sortBy(s => (s.pos, s.ref, s.alt))
+    if (onlyCount) {
+      val count = filteredVds.countVariants().toInt
+      GetStatsResult(is_error = false, None, req.passback, None, None, Some(count)) // FIXME: make sure consistent with spec
+    }
     else {
-      val sortFields = req.sort_by.get
-      if (! sortFields.areDistinct())
-        throw new RestFailure("sort_by arguments must be distinct")
+      val (restStatsRDD, nSamplesKept) = LinearRegression.restApply(filteredVds, phenoTable, yName, covNames, minMAC, maxMAC)
 
-      //      var fields = a.toList
-      //
-      //      // Default sort order is [pos, ref, alt] and sortBy is stable
-      //      if (fields.nonEmpty && fields.head == "pos") {
-      //        fields = fields.tail
-      //        if (fields.nonEmpty && fields.head == "ref") {
-      //          fields = fields.tail
-      //          if (fields.nonEmpty && fields.head == "alt")
-      //            fields = fields.tail
-      //        }
-      //      }
+      var restStats =
+        if (req.limit.isEmpty)
+          restStatsRDD.collect() // avoids first pass of take, modify if stats grows beyond memory capacity
+        else {
+          val limit = req.limit.get
+          if (limit < 0)
+            throw new RestFailure(s"limit must be non-negative: got $limit")
+          restStatsRDD.take(limit)
+        }
 
-      sortFields.reverse.foreach { f =>
-        restStats = f match {
-          case "pos" => restStats.sortBy(_.pos)
-          case "ref" => restStats.sortBy(_.ref)
-          case "alt" => restStats.sortBy(_.alt)
-          case "p-value" => restStats.sortBy(_.`p-value`.getOrElse(2d))
-          case _ => throw new RestFailure(s"Valid sort_by arguments are `pos', `ref', `alt', and `p-value': got $f")
+      if (restStats.size > hardLimit)
+        restStats = restStats.take(hardLimit)
+
+      // FIXME: is standard sorting now preserved with OrderedRDD?
+
+      if (req.sort_by.isEmpty)
+        restStats = restStats.sortBy(s => (s.pos, s.ref, s.alt))
+      else {
+        val sortFields = req.sort_by.get
+        if (!sortFields.areDistinct())
+          throw new RestFailure("sort_by arguments must be distinct")
+
+        //      var fields = a.toList
+        //
+        //      // Default sort order is [pos, ref, alt] and sortBy is stable
+        //      if (fields.nonEmpty && fields.head == "pos") {
+        //        fields = fields.tail
+        //        if (fields.nonEmpty && fields.head == "ref") {
+        //          fields = fields.tail
+        //          if (fields.nonEmpty && fields.head == "alt")
+        //            fields = fields.tail
+        //        }
+        //      }
+
+        sortFields.reverse.foreach { f =>
+          restStats = f match {
+            case "pos" => restStats.sortBy(_.pos)
+            case "ref" => restStats.sortBy(_.ref)
+            case "alt" => restStats.sortBy(_.alt)
+            case "p-value" => restStats.sortBy(_.`p-value`.getOrElse(2d))
+            case _ => throw new RestFailure(s"Valid sort_by arguments are `pos', `ref', `alt', and `p-value': got $f")
+          }
         }
       }
-    }
-
-    if (req.count.getOrElse(false))
-      GetStatsResult(is_error = false, None, req.passback, None, Some(nSamplesKept), Some(restStats.size)) // FIXME: don't bother to compute when just returning count
-    else
       GetStatsResult(is_error = false, None, req.passback, Some(restStats), Some(nSamplesKept), Some(restStats.size))
+    }
   }
 
   def service(implicit executionContext: ExecutionContext = ExecutionContext.global): HttpService = Router(

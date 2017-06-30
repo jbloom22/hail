@@ -107,7 +107,7 @@ object LinearRegression {
     val QtyBc = sc.broadcast(Qty)
     val yypBc = sc.broadcast((y dot y) - (Qty dot Qty))
 
-    (vds.rdd.map { case (v, va, gs) =>
+    (vds.rdd.map { case (v, (va, gs)) =>
       val (x: SparseVector[Double], ac) = RegressionUtils.hardCallsWithAC(gs, n, sampleMaskBc.value)
 
       val optPval =
