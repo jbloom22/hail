@@ -159,7 +159,9 @@ class RestService(vds: VariantDataset, phenoTable: PhenotypeTable, maxWidth: Int
     
     // Construct interval
     
+    
     // Filter to interval
+    
     
     val statsRDD: RDD[RestStat] = LinearRegression.restApply(vds, phenoTable, yName, covNames, minMAC, maxMAC)
 
