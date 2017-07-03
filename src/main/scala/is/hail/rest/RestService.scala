@@ -1,6 +1,8 @@
 package is.hail.rest
 
+import breeze.linalg.{DenseMatrix, DenseVector}
 import is.hail.methods.LinearRegression
+import is.hail.stats.RegressionUtils
 import is.hail.variant._
 import is.hail.utils._
 import is.hail.variant.VariantDataset
@@ -54,9 +56,10 @@ case class GetStatsResult(is_error: Boolean,
 
 class RestFailure(message: String) extends Exception(message)
 
-class RestService(vds: VariantDataset, phenoTable: PhenotypeTable, maxWidth: Int, hardLimit: Int) {
-  val availablePhenotypes: Set[String] = phenoTable.phenotypes.toSet  
-
+class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int, hardLimit: Int) {
+  val availableCovariates: Set[String] = covariates.toSet  
+  val allCovariateData: Map[String, Array[Double]] = RegressionUtils.getCovMap(vds, covariates)
+    
   def getStats(req: GetStatsRequest): GetStatsResult = {
     req.md_version.foreach { md_version =>
       if (md_version != "mdv1")
@@ -66,8 +69,7 @@ class RestService(vds: VariantDataset, phenoTable: PhenotypeTable, maxWidth: Int
     if (req.api_version != 1)
       throw new RestFailure(s"Unsupported API version `${req.api_version}'. Supported API versions: 1")
 
-    // check pheno and covs
-    val yName = req.phenotype.getOrElse("T2D") // FIXME: remove default, change spec
+    // check and pheno and covs
     val covNamesSet = mutable.Set[String]()
     val covVariantsSet = mutable.Set[Variant]()
     
@@ -77,7 +79,7 @@ class RestService(vds: VariantDataset, phenoTable: PhenotypeTable, maxWidth: Int
           case "phenotype" =>
             c.name match {
               case Some(name) =>
-                if (availablePhenotypes(name))
+                if (availableCovariates(name))
                   covNamesSet += name
                 else
                   throw new RestFailure(s"$name is not a valid phenotype")
@@ -96,11 +98,12 @@ class RestService(vds: VariantDataset, phenoTable: PhenotypeTable, maxWidth: Int
         }
     }
     
-    if (covNamesSet(yName))
-      throw new RestFailure(s"$yName appears as both response phenotype and a covariate phenotype")
-
+    val yName = req.phenotype.getOrElse("T2D") // FIXME: remove default, change spec
     val covNames = covNamesSet.toArray
     val covVariants = covVariantsSet.toArray
+    
+    if (covNamesSet(yName))
+      throw new RestFailure(s"$yName appears as both response phenotype and a covariate phenotype")
 
     // check and construct variant filters
     var chrom = ""
@@ -161,6 +164,21 @@ class RestService(vds: VariantDataset, phenoTable: PhenotypeTable, maxWidth: Int
     println(s"Using window: $window")
     
     val filteredVds = vds.filterIntervals(IntervalTree(Array(window)), keep = true)       
+    
+    def getPhenoCovMask(yName: String, covNames: Array[String], covVariants: Array[Variant] = Array.empty[Variant]): (DenseVector[Double], DenseMatrix[Double], Array[Boolean]) = {
+      // determine sample mask
+      
+      // create y array
+      
+      // create cov array of length (1 + nCovs + nVariants) * nMaskedSamples
+      
+      // copy in cov data
+      
+      // copy in variant data
+      
+      // create vector and matrix and return with sample mask
+    }
+    
     val onlyCount = req.count.getOrElse(false)
     
     if (onlyCount) {
@@ -168,7 +186,9 @@ class RestService(vds: VariantDataset, phenoTable: PhenotypeTable, maxWidth: Int
       GetStatsResult(is_error = false, None, req.passback, None, None, Some(count)) // FIXME: make sure consistent with spec
     }
     else {
-      val (restStatsRDD, nSamplesKept) = LinearRegression.restApply(filteredVds, phenoTable, yName, covNames, minMAC, maxMAC)
+      val (y, cov, sampleMask) = getPhenoCovMask(yName, covNames, covVariants)    
+      
+      val (restStatsRDD, nSamplesKept) = LinearRegression.applyRest(filteredVds, y, cov, sampleMask, minMAC, maxMAC)
 
       var restStats =
         if (req.limit.isEmpty)

@@ -76,13 +76,9 @@ object LinearRegression {
   }
   
   // FIXME: refactor with above
-  def restApply(vds: VariantDataset, phenoTable: PhenotypeTable, yName: String, covNames: Array[String], 
-    minMAC: Int, maxMAC: Int): (RDD[RestStat], Int) = {
+  def applyRest(vds: VariantDataset, y: DenseVector[Double], cov: DenseMatrix[Double], sampleMask: Array[Boolean], minMAC: Int, maxMAC: Int): (RDD[RestStat], Int) = {
     require(vds.wasSplit)
     require(minMAC >= 0 && maxMAC >= minMAC)
-
-    val (y, cov, completeSamples) = RegressionUtils.getPhenoCovCompleteSamples(phenoTable, yName, covNames)
-    val sampleMask = vds.sampleIds.map(completeSamples.toSet).toArray
 
     val n = y.size
     val k = cov.cols

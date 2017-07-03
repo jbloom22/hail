@@ -201,13 +201,23 @@ object RegressionUtils {
       (aQ().map(Option(_)), aToDouble).zipped.map(_.map(_))
     }
   }
+  
+  // no intercept
+  def getCovMap(
+    vds: VariantDataset,
+    covariates: Array[String]): Map[String, Array[Double]] = {
 
-  def getPhenoCovCompleteSamples(
-    phenoTable: PhenotypeTable,
-    yName: String,
-    covNames: Array[String]): (DenseVector[Double], DenseMatrix[Double], IndexedSeq[Annotation]) = {
+    val symTab = Map(
+      "s" -> (0, TString),
+      "sa" -> (1, vds.saSignature))
+
+    val ec = EvalContext(symTab)
+    val covIS = getSampleAnnotations(vds, covariates, ec)
+    val covArray = covIS.flatMap(_.map(_.getOrElse(Double.NaN))).toArray
+    val cov = new DenseMatrix(rows = vds.nSamples, cols = covariates.size, data = covArray,
+      offset = 0, majorStride = covariates.size, isTranspose = true) // FIXME simplify?
     
-    // find samples for which 
+    covariates.indices.map(i => covariates(i) -> cov(::, i).toArray).toMap
   }
 
   def getPhenoCovCompleteSamples(
