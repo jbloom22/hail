@@ -41,14 +41,14 @@ class RestSuite extends SparkSuite {
   var r: RestRunnable = _
   var t: Thread = _
 
-  @BeforeClass
-  override def startSpark() = {
-    super.startSpark()
-    r = new RestRunnable(hc)
-    t = new Thread(r)
-    t.start()
-
-    Thread.sleep(8000) // FIXME: This is a hack
+//  @BeforeClass
+//  override def startSpark() = {
+//    super.startSpark()
+//  r = new RestRunnable(hc)
+//  t = new Thread(r)
+//  t.start()
+//
+//    Thread.sleep(8000) // FIXME: This is a hack
 
 //    var isUnavailable = true
 //    var nAttempts = 0
@@ -58,9 +58,15 @@ class RestSuite extends SparkSuite {
 //      if () // FIXME: How do I test if servor is up?
 //        isUnavailable = false
 //    } while (isUnavailable && nAttempts < 20)
-  }
+//  }
 
   @Test def test() {
+    
+    r = new RestRunnable(hc)
+    t = new Thread(r)
+    t.start()
+
+    Thread.sleep(8000) // FIXME: This is a hack
 
     /*
     Sample code for generating p-values in R (below, missing genotypes are imputed using all samples; use subset when using BMI or HEIGHT):
@@ -1517,13 +1523,16 @@ class RestSuite extends SparkSuite {
         .body("error_message", containsString("Variant 3:1:C:T is not in the hard call set"))
         .extract()
         .response()
-  }
-
-
-  @AfterClass(alwaysRun = true)
-  override def stopSparkContext() = {
+    
     r.task.shutdownNow()
     t.join()
-    super.stopSparkContext()
   }
+
+
+//  @AfterClass(alwaysRun = true)
+//  override def stopSparkContext() = {
+//    r.task.shutdownNow()
+//    t.join()
+//    super.stopSparkContext()
+//  }
 }

@@ -205,7 +205,10 @@ object RegressionUtils {
   def getPhenoCovCompleteSamples(
     phenoTable: PhenotypeTable,
     yName: String,
-    covNames: Array[String]): (DenseVector[Double], DenseMatrix[Double], IndexedSeq[Annotation]) = ???
+    covNames: Array[String]): (DenseVector[Double], DenseMatrix[Double], IndexedSeq[Annotation]) = {
+    
+    // find samples for which 
+  }
 
   def getPhenoCovCompleteSamples(
     vds: VariantDataset,
