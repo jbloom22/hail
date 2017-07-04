@@ -54,12 +54,15 @@ case class GetStatsResult(is_error: Boolean,
   nsamples: Option[Int],
   count: Option[Int])
 
-class RestFailure(message: String) extends Exception(message)
+class RestFailure(message: String) extends Exception(message) {
+  info(s"RestFailure: $message")
+}
 
 class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int, hardLimit: Int) { 
-  val (sampleMap: Array[Array[Boolean]], allCovariateData: Map[String, Array[Double]]) = RegressionUtils.getCovMap(vds, covariates)
+  val (sampleMap: Array[Array[Boolean]], allCovariateData: Map[String, Array[Double]]) = RegressionUtils.getSampleAndCovMaps(vds, covariates)
   val availableCovariates: Set[String] = allCovariateData.keySet
   val covariateIndices: Map[String, Int] = covariates.zipWithIndex.toMap
+  val nSamples: Int = vds.nSamples
   
   def getStats(req: GetStatsRequest): GetStatsResult = {
     req.md_version.foreach { md_version =>
@@ -70,7 +73,7 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
     if (req.api_version != 1)
       throw new RestFailure(s"Unsupported API version `${req.api_version}'. Supported API versions: 1")
 
-    // check and pheno and covs
+    // check and construct pheno and covNames, and covVariants
     val covNamesSet = mutable.Set[String]()
     val covVariantsSet = mutable.Set[Variant]()
     
@@ -82,18 +85,22 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
               case Some(name) =>
                 if (availableCovariates(name))
                   if (covNamesSet(name))
-                    throw new RestFailure(s"$name is included more than once")
+                    throw new RestFailure(s"Covariate $name is included as a covariate more than once")
                   else
                     covNamesSet += name
                 else
-                  throw new RestFailure(s"$name is not a valid phenotype")
+                  throw new RestFailure(s"$name is not a valid covariate name")
               case None =>
                 throw new RestFailure("Covariate of type 'phenotype' must include 'name' field in request")
             }
           case "variant" =>
             (c.chrom, c.pos, c.ref, c.alt) match {
               case (Some(chr), Some(pos), Some(ref), Some(alt)) =>
-                covVariantsSet += Variant(chr, pos, ref, alt)
+                val v = Variant(chr, pos, ref, alt)
+                if (covVariantsSet(v))
+                  throw new RestFailure(s"$v is included as a covariate more than once")
+                else  
+                  covVariantsSet += v
               case missingFields =>
                 throw new RestFailure("Covariate of type 'variant' must include 'chrom', 'pos', 'ref', and 'alt' fields in request")
             }
@@ -101,14 +108,19 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
             throw new RestFailure(s"Covariate type must be 'phenotype' or 'variant': got $other")
         }
     }
-        
-    val yName = req.phenotype.getOrElse("T2D") // FIXME: remove default, change spec
+    
+    val yName = req.phenotype.getOrElse {
+      throw new RestFailure("Missing required field: phenotype")
+    }
+    if (!availableCovariates(yName))
+      throw new RestFailure(s"$yName is not a valid phenotype name")
+    
     val covNames = covNamesSet.toArray
     val covVariants = covVariantsSet.toArray
     
     assert(covNamesSet.size == covNames.size)
     if (covNamesSet(yName))
-      throw new RestFailure(s"$yName appears as both response phenotype and a covariate phenotype")
+      throw new RestFailure(s"$yName appears as both response phenotype and covariate")
 
     // check and construct variant filters
     var chrom = ""
@@ -138,7 +150,7 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
             case "gt" => minPos = minPos max (f.value.toInt + 1)
             case "lte" => maxPos = maxPos min f.value.toInt
             case "lt" => maxPos = maxPos min (f.value.toInt - 1)
-            case "eq" => minPos = f.value.toInt; maxPos = f.value.toInt
+            case "eq" => minPos = minPos max f.value.toInt; maxPos = maxPos min f.value.toInt
             case other =>
               throw new RestFailure(s"pos filter operator must be 'gte', 'gt', 'lte', 'lt', or 'eq': got '$other'")
           }
@@ -163,22 +175,25 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
     val width = maxPos - minPos
     if (width > maxWidth)
       throw new RestFailure(s"Interval length cannot exceed $maxWidth: got $width")
+        
+    if (width < 0)
+      throw new RestFailure(s"Window is empty: got start $minPos and end $maxPos")
     
-    val window = Interval(Locus(chrom, minPos), Locus(chrom, maxPos))
+    info(s"Window is $chrom:$minPos-$maxPos. Width is $width.")
     
-    println(s"Using window: $window")
-    
-    val filteredVds = vds.filterIntervals(IntervalTree(Array(window)), keep = true)       
+    val window = Interval(Locus(chrom, minPos), Locus(chrom, maxPos + 1))
+
+    val windowedVds = vds.filterIntervals(IntervalTree(Array(window)), keep = true)   
     
     def getPhenoCovMask(yName: String, covNames: Array[String], covVariants: Array[Variant] = Array.empty[Variant]): (DenseVector[Double], DenseMatrix[Double], Array[Boolean]) = {
       // determine sample mask
       val yCovIndices = (yName +: covNames).map(covariateIndices).sorted
       
-      val sampleMask = Array.ofDim[Boolean](filteredVds.nSamples)
+      val sampleMask = Array.ofDim[Boolean](nSamples)
       var nMaskedSamples = 0
      
       var i = 0
-      while (i < filteredVds.nSamples) {
+      while (i < nSamples) {
         val include = yCovIndices.forall(sampleMap(i)) // FIXME: this doesn't short circuit...
         if (include) {
           sampleMask(i) = true
@@ -192,7 +207,7 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
       val yAllSamples = allCovariateData(yName)
       var j = 0
       var k = 0
-      while (j < nMaskedSamples) {
+      while (j < nSamples) {
         if (sampleMask(j)) {
           yArray(k) = yAllSamples(j)
           k += 1
@@ -216,7 +231,7 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
       covNames.foreach { covName =>
         val covAllSamples = allCovariateData(covName)
         j = 0        
-        while (j < nMaskedSamples) {
+        while (j < nSamples) {
           if (sampleMask(j)) {
             covArray(k) = covAllSamples(j)
             k += 1
@@ -225,25 +240,46 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
         }
       }
       
+      val covVariantsImmutSet = covVariantsSet.toSet
+      
       // variant covariates FIXME: add variant covariates
+      val covVariantGenotypes = windowedVds
+        .filterVariantsList(covVariantsImmutSet, keep = true)
+        .rdd
+        .map { case (v, (va, gs)) => (v, RegressionUtils.hardCalls(gs, nMaskedSamples, sampleMask).toArray) } // FIXME can speed up
+        .collect()
       
+      if (covVariantGenotypes.size < covVariants.size) {
+        val missingVariants = covVariantsImmutSet.diff(covVariantGenotypes.map(_._1).toSet)
+        throw new RestFailure(s"$missingVariants are missing from window or vds")
+      }  
       
+      i = 0
+      while (i < covVariants.size) { 
+        j = 0
+        while (j < nMaskedSamples) {
+          covArray(k) = covVariantGenotypes(i)._2(j)
+          j += 1
+          k += 1
+        }
+        i += 1
+      }
+      
+      assert(k == covArray.size)
       
       val y = DenseVector(yArray)
       val cov = new DenseMatrix[Double](nMaskedSamples, nCovs, covArray)
       (y, cov, sampleMask)
     }
     
-    val onlyCount = req.count.getOrElse(false)
-    
-    if (onlyCount) {
-      val count = filteredVds.countVariants().toInt
+    if (req.count.getOrElse(false)) {
+      val count = windowedVds.countVariants().toInt
       GetStatsResult(is_error = false, None, req.passback, None, None, Some(count)) // FIXME: make sure consistent with spec
     }
     else {
       val (y, cov, sampleMask) = getPhenoCovMask(yName, covNames, covVariants)    
       
-      val (restStatsRDD, nSamplesKept) = LinearRegression.applyRest(filteredVds, y, cov, sampleMask, minMAC, maxMAC)
+      val restStatsRDD = LinearRegression.applyRest(windowedVds, y, cov, sampleMask, minMAC, maxMAC)
 
       var restStats =
         if (req.limit.isEmpty)
@@ -258,10 +294,8 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
       if (restStats.size > hardLimit)
         restStats = restStats.take(hardLimit)
 
-      // FIXME: is standard sorting now preserved with OrderedRDD?
-
       if (req.sort_by.isEmpty)
-        restStats = restStats.sortBy(s => (s.pos, s.ref, s.alt))
+        restStats = restStats.sortBy(s => (s.pos, s.ref, s.alt)) // FIXME: may be able to remove now
       else {
         val sortFields = req.sort_by.get
         if (!sortFields.areDistinct())
@@ -289,7 +323,7 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
           }
         }
       }
-      GetStatsResult(is_error = false, None, req.passback, Some(restStats), Some(nSamplesKept), Some(restStats.size))
+      GetStatsResult(is_error = false, None, req.passback, Some(restStats), Some(y.size), Some(restStats.size))
     }
   }
 

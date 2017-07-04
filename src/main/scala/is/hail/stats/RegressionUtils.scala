@@ -202,7 +202,7 @@ object RegressionUtils {
   }
   
   // no intercept
-  def getCovMap(
+  def getSampleAndCovMaps(
     vds: VariantDataset,
     covariates: Array[String]): (Array[Array[Boolean]], Map[String, Array[Double]]) = {
 

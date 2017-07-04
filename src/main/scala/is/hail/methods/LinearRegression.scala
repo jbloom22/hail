@@ -76,13 +76,17 @@ object LinearRegression {
   }
   
   // FIXME: refactor with above (change entry to linreg)
-  def applyRest(vds: VariantDataset, y: DenseVector[Double], cov: DenseMatrix[Double], sampleMask: Array[Boolean], minMAC: Int, maxMAC: Int): (RDD[RestStat], Int) = {
+  def applyRest(vds: VariantDataset, y: DenseVector[Double], cov: DenseMatrix[Double], sampleMask: Array[Boolean], minMAC: Int, maxMAC: Int): RDD[RestStat] = {
     require(vds.wasSplit)
     require(minMAC >= 0 && maxMAC >= minMAC)
 
     val n = y.size
     val k = cov.cols
     val d = n - k - 1
+    
+    println(sampleMask.toIndexedSeq)
+    println(y)
+    println(cov)
 
     if (d < 1)
       fatal(s"$n samples and $k ${ plural(k, "covariate") } including intercept implies $d degrees of freedom.")
@@ -103,7 +107,7 @@ object LinearRegression {
     val QtyBc = sc.broadcast(Qty)
     val yypBc = sc.broadcast((y dot y) - (Qty dot Qty))
 
-    (vds.rdd.map { case (v, (va, gs)) =>
+    vds.rdd.map { case (v, (va, gs)) =>
       val (x: SparseVector[Double], ac) = RegressionUtils.hardCallsWithAC(gs, n, sampleMaskBc.value)
 
       val optPval =
@@ -126,6 +130,6 @@ object LinearRegression {
           None
 
       RestStat(v.contig, v.start, v.ref, v.alt, optPval)
-    }, n)
+    }
   }
 }
