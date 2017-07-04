@@ -1010,7 +1010,7 @@ class RestSuite extends SparkSuite {
         .contentType("application/json")
         .body(
           """{
-            |  "passback"        : "sortAltPValue",
+            |  "passback"        : "macSortAltPValue",
             |  "api_version"     : 1,
             |  "phenotype"       : "sa.rest.T2D",
             |  "variant_filters" : [
@@ -1033,7 +1033,40 @@ class RestSuite extends SparkSuite {
         .response()
 
     println(response.asString())
+    
+    response =
+      given()
+        .config(config().jsonConfig(new JsonConfig(NumberReturnType.DOUBLE)))
+        .contentType("application/json")
+        .body(
+          """{
+            |  "passback"        : "macBounds",
+            |  "api_version"     : 1,
+            |  "phenotype"       : "sa.rest.T2D",
+            |  "covariates"      : [
+            |                        {"type": "phenotype", "name": "sa.rest.HEIGHT"}
+            |                      ],
+            |  "variant_filters" : [
+            |                        {"operand": "chrom", "operator": "eq", "value": "1", "operand_type": "string"},
+            |                        {"operand": "pos", "operator": "lte", "value": 500000, "operand_type": "integer"},
+            |                        {"operand": "mac", "operator": "lt", "value": 2, "operand_type": "integer"}
+            |                      ]
+            |}""".stripMargin)
+        .when()
+        .post("/getStats")
+        .`then`()
+        .statusCode(200)
+        .body("is_error", is(false))
+        .body("stats[0].p-value", is(nullValue())) // all AC are 2
+        .body("stats[1].p-value", is(nullValue()))
+        .body("stats[2].p-value", is(nullValue()))
+        .body("stats[3].p-value", is(nullValue()))
+        .body("stats[4].p-value", is(nullValue()))
+        .extract()
+        .response()
 
+    println(response.asString())
+    
     response =
       given()
         .config(config().jsonConfig(new JsonConfig(NumberReturnType.DOUBLE)))

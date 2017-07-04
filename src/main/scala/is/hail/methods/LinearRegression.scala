@@ -86,10 +86,13 @@ object LinearRegression {
     
     if (d < 1)
       fatal(s"$n samples and $k ${ plural(k, "covariate") } including intercept implies $d degrees of freedom.")
-
-    // FIXME: Test this
-    val minAC = 1 max (minMAC max (2 * n - maxMAC))
-    val maxAC = (2 * n - 1) min (maxMAC min (2 * n - minMAC))
+    
+    val lowerMinAC = 1 max minMAC
+    val lowerMaxAC = n min maxMAC
+    val upperMinAC = 2 * n - lowerMaxAC
+    val upperMaxAC = 2 * n - lowerMinAC
+    
+    def inRange(ac: Int): Boolean = (ac >= lowerMinAC && ac <= lowerMaxAC) || (ac >= upperMinAC && ac <= upperMaxAC)
     
     info(s"Running linear regression on $n samples with $k ${ plural(k, "covariate") } including intercept...")
 
@@ -107,7 +110,7 @@ object LinearRegression {
       val (x: SparseVector[Double], ac) = RegressionUtils.hardCallsWithAC(gs, n, sampleMaskBc.value)
 
       val optPval =
-        if (ac >= minAC && ac <= maxAC) {
+        if (inRange(ac.toInt)) {
           val qtx = QtBc.value * x
           val xxp = (x dot x) - (qtx dot qtx)
           val xyp = (x dot yBc.value) - (qtx dot QtyBc.value)
