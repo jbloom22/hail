@@ -3,7 +3,6 @@ package is.hail.stats
 import breeze.linalg._
 import is.hail.annotations.Annotation
 import is.hail.expr._
-import is.hail.rest.PhenotypeTable
 import is.hail.utils._
 import is.hail.variant.{Genotype, VariantDataset}
 import org.apache.spark.sql.Row
@@ -205,7 +204,7 @@ object RegressionUtils {
   // no intercept
   def getCovMap(
     vds: VariantDataset,
-    covariates: Array[String]): Map[String, Array[Double]] = {
+    covariates: Array[String]): (Array[Array[Boolean]], Map[String, Array[Double]]) = {
 
     val symTab = Map(
       "s" -> (0, TString),
@@ -213,11 +212,15 @@ object RegressionUtils {
 
     val ec = EvalContext(symTab)
     val covIS = getSampleAnnotations(vds, covariates, ec)
+    val sampleMap = covIS.map(_.map(_.isDefined)).toArray
+    
     val covArray = covIS.flatMap(_.map(_.getOrElse(Double.NaN))).toArray
     val cov = new DenseMatrix(rows = vds.nSamples, cols = covariates.size, data = covArray,
       offset = 0, majorStride = covariates.size, isTranspose = true) // FIXME simplify?
     
-    covariates.indices.map(i => covariates(i) -> cov(::, i).toArray).toMap
+    val covMap = covariates.indices.map(j => covariates(j) -> cov(::, j).toArray).toMap
+    
+    (sampleMap, covMap)
   }
 
   def getPhenoCovCompleteSamples(

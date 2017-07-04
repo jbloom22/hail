@@ -56,10 +56,11 @@ case class GetStatsResult(is_error: Boolean,
 
 class RestFailure(message: String) extends Exception(message)
 
-class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int, hardLimit: Int) {
-  val availableCovariates: Set[String] = covariates.toSet  
-  val allCovariateData: Map[String, Array[Double]] = RegressionUtils.getCovMap(vds, covariates)
-    
+class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int, hardLimit: Int) { 
+  val (sampleMap: Array[Array[Boolean]], allCovariateData: Map[String, Array[Double]]) = RegressionUtils.getCovMap(vds, covariates)
+  val availableCovariates: Set[String] = allCovariateData.keySet
+  val covariateIndices: Map[String, Int] = covariates.zipWithIndex.toMap
+  
   def getStats(req: GetStatsRequest): GetStatsResult = {
     req.md_version.foreach { md_version =>
       if (md_version != "mdv1")
@@ -80,7 +81,10 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
             c.name match {
               case Some(name) =>
                 if (availableCovariates(name))
-                  covNamesSet += name
+                  if (covNamesSet(name))
+                    throw new RestFailure(s"$name is included more than once")
+                  else
+                    covNamesSet += name
                 else
                   throw new RestFailure(s"$name is not a valid phenotype")
               case None =>
@@ -97,11 +101,12 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
             throw new RestFailure(s"Covariate type must be 'phenotype' or 'variant': got $other")
         }
     }
-    
+        
     val yName = req.phenotype.getOrElse("T2D") // FIXME: remove default, change spec
     val covNames = covNamesSet.toArray
     val covVariants = covVariantsSet.toArray
     
+    assert(covNamesSet.size == covNames.size)
     if (covNamesSet(yName))
       throw new RestFailure(s"$yName appears as both response phenotype and a covariate phenotype")
 
@@ -167,16 +172,66 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
     
     def getPhenoCovMask(yName: String, covNames: Array[String], covVariants: Array[Variant] = Array.empty[Variant]): (DenseVector[Double], DenseMatrix[Double], Array[Boolean]) = {
       // determine sample mask
+      val yCovIndices = (yName +: covNames).map(covariateIndices).sorted
       
-      // create y array
+      val sampleMask = Array.ofDim[Boolean](filteredVds.nSamples)
+      var nMaskedSamples = 0
+     
+      var i = 0
+      while (i < filteredVds.nSamples) {
+        val include = yCovIndices.forall(sampleMap(i)) // FIXME: this doesn't short circuit...
+        if (include) {
+          sampleMask(i) = true
+          nMaskedSamples += 1
+        }  
+        i += 1
+      }
       
-      // create cov array of length (1 + nCovs + nVariants) * nMaskedSamples
+      // phenotype y
+      val yArray = Array.ofDim[Double](nMaskedSamples)
+      val yAllSamples = allCovariateData(yName)
+      var j = 0
+      var k = 0
+      while (j < nMaskedSamples) {
+        if (sampleMask(j)) {
+          yArray(k) = yAllSamples(j)
+          k += 1
+        }
+        j += 1
+      }
+
+      // covariates
+      val nCovs = 1 + covNames.size + covVariants.size
+      val covArray = Array.ofDim[Double](nMaskedSamples * nCovs)
       
-      // copy in cov data
+      // intercept
+      i = 0
+      while (i < nMaskedSamples) {
+        covArray(i) = 1
+        i += 1
+      }
+
+      // phenotypic covariates
+      k = nMaskedSamples
+      covNames.foreach { covName =>
+        val covAllSamples = allCovariateData(covName)
+        j = 0        
+        while (j < nMaskedSamples) {
+          if (sampleMask(j)) {
+            covArray(k) = covAllSamples(j)
+            k += 1
+          }
+          j += 1
+        }
+      }
       
-      // copy in variant data
+      // variant covariates FIXME: add variant covariates
       
-      // create vector and matrix and return with sample mask
+      
+      
+      val y = DenseVector(yArray)
+      val cov = new DenseMatrix[Double](nMaskedSamples, nCovs, covArray)
+      (y, cov, sampleMask)
     }
     
     val onlyCount = req.count.getOrElse(false)

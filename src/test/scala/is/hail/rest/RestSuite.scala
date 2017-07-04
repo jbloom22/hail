@@ -23,10 +23,8 @@ class RestRunnable(hc: HailContext) extends Runnable {
     val vds: VariantDataset = hc.importVCF("src/test/resources/t2dserver.vcf")
       .coalesce(2)
       .annotateSamplesTable(sampleKT)
-    
-    val phenoTable = ???
-    
-    val restService = new RestService(vds, phenoTable, 600000, 100000)
+        
+    val restService = new RestService(vds, covariates, 600000, 100000)
 
     task = BlazeBuilder.bindHttp(8080)
       .mountService(restService.service, "/")
