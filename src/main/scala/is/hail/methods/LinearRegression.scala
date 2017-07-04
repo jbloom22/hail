@@ -84,17 +84,13 @@ object LinearRegression {
     val k = cov.cols
     val d = n - k - 1
     
-    println(sampleMask.toIndexedSeq)
-    println(y)
-    println(cov)
-
     if (d < 1)
       fatal(s"$n samples and $k ${ plural(k, "covariate") } including intercept implies $d degrees of freedom.")
 
     // FIXME: Test this
-    val minAC = 1 max (minMAC min (2 * n - maxMAC))
+    val minAC = 1 max (minMAC max (2 * n - maxMAC))
     val maxAC = (2 * n - 1) min (maxMAC min (2 * n - minMAC))
-
+    
     info(s"Running linear regression on $n samples with $k ${ plural(k, "covariate") } including intercept...")
 
     val Qt = qr.reduced.justQ(cov).t

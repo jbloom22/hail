@@ -1024,11 +1024,11 @@ class RestSuite extends SparkSuite {
         .`then`()
         .statusCode(200)
         .body("is_error", is(false))
-//        .body("stats[0].p-value", is(nullValue()))
-//        .body("stats[1].p-value", closeTo(0.391075888, 1e-5))
-//        .body("stats[2].p-value", is(nullValue())) // mac is computed without mean imputation
-//        .body("stats[3].p-value", is(nullValue()))
-//        .body("stats[4].p-value", closeTo(0.764805599, 1e-5))
+        .body("stats[0].p-value", is(nullValue()))
+        .body("stats[1].p-value", closeTo(0.391075888, 1e-5))
+        .body("stats[2].p-value", is(nullValue())) // mac is computed without mean imputation
+        .body("stats[3].p-value", is(nullValue()))
+        .body("stats[4].p-value", closeTo(0.764805599, 1e-5))
         .extract()
         .response()
 
@@ -1462,7 +1462,7 @@ class RestSuite extends SparkSuite {
         .`then`()
         .statusCode(400)
         .body("is_error", is(true))
-        .body("error_message", containsString("Value of position in variant_filter must be an integer"))
+        .body("error_message", containsString("must be a valid non-negative integer"))
         .extract()
         .response()
 
@@ -1487,7 +1487,7 @@ class RestSuite extends SparkSuite {
         .`then`()
         .statusCode(400)
         .body("is_error", is(true))
-        .body("error_message", containsString("Value of position in variant_filter must be an integer"))
+        .body("error_message", containsString("must be a valid non-negative integer"))
         .extract()
         .response()
 
@@ -1560,7 +1560,31 @@ class RestSuite extends SparkSuite {
         .post("/getStats")
         .`then`()
         .statusCode(400)
-        .body("error_message", containsString("Variant 3:1:C:T is not in the hard call set"))
+        .body("error_message", containsString("VDS does not contain variant covariate 3:1:C:T"))
+        .extract()
+        .response()
+    
+        response =
+      given()
+        .config(config().jsonConfig(new JsonConfig(NumberReturnType.DOUBLE)))
+        .contentType("application/json")
+        .body(
+          """{
+            |  "passback"        : "missingVariantCovariate",
+            |  "api_version"     : 1,
+            |  "phenotype"       : "sa.rest.T2D",
+            |  "covariates"      : [
+            |                        {"type": "variant", "chrom": "2", "pos": 1, "ref": "C", "alt": "A"}
+            |                      ],
+            |  "variant_filters" : [
+            |                        {"operand": "chrom", "operator": "eq", "value": "1", "operand_type": "string"},
+            |                        {"operand": "pos", "operator": "lte", "value": 500000, "operand_type": "integer"}
+            |                      ]
+            |}""".stripMargin)
+        .when()
+        .post("/getStats")
+        .`then`()
+        .statusCode(200)
         .extract()
         .response()
     

@@ -59,10 +59,105 @@ class RestFailure(message: String) extends Exception(message) {
 }
 
 class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int, hardLimit: Int) { 
-  val (sampleMap: Array[Array[Boolean]], allCovariateData: Map[String, Array[Double]]) = RegressionUtils.getSampleAndCovMaps(vds, covariates)
-  val availableCovariates: Set[String] = allCovariateData.keySet
-  val covariateIndices: Map[String, Int] = covariates.zipWithIndex.toMap
+  val availableCovariates: Set[String] = covariates.toSet
+  val availableCovariateToIndex: Map[String, Int] = covariates.zipWithIndex.toMap
+  val (sampleIndexToPresentness: Array[Array[Boolean]], covariateIndexToData: Array[Array[Double]]) = RegressionUtils.getSampleAndCovMaps(vds, covariates)
   val nSamples: Int = vds.nSamples
+  val sampleMask: Array[Boolean] = Array.ofDim[Boolean](nSamples)
+  
+  def windowToString(window: Interval[Locus]): String =
+    s"${window.start.contig}:${window.start.position}-${window.end.position - 1}"
+  
+  def getYCovSampleMask(window: Interval[Locus],yName: String, covNames: Array[String],
+    covVariants: Array[Variant] = Array.empty[Variant]): (DenseVector[Double], DenseMatrix[Double], Array[Boolean]) = {
+    
+    // set sample mask
+    val yCovIndices = (yName +: covNames).map(availableCovariateToIndex).sorted
+    
+    var nMaskedSamples = 0
+    var sampleIndex = 0
+    while (sampleIndex < nSamples) {
+      val include = yCovIndices.forall(sampleIndexToPresentness(sampleIndex))
+      sampleMask(sampleIndex) = include // FIXME: this doesn't short circuit...
+      if (include) nMaskedSamples += 1
+      sampleIndex += 1
+    }
+    
+    // set y
+    val yArray = Array.ofDim[Double](nMaskedSamples)
+    val yData = covariateIndexToData(availableCovariateToIndex(yName))
+    
+    var arrayIndex = 0
+    sampleIndex = 0
+    while (sampleIndex < nSamples) {
+      if (sampleMask(sampleIndex)) {
+        yArray(arrayIndex) = yData(sampleIndex)
+        arrayIndex += 1
+      }
+      sampleIndex += 1
+    }
+    
+    val y = DenseVector(yArray)
+
+    // set cov
+    val nCovs = 1 + covNames.size + covVariants.size
+    val covArray = Array.ofDim[Double](nMaskedSamples * nCovs)
+    
+    // intercept
+    arrayIndex = 0
+    while (arrayIndex < nMaskedSamples) {
+      covArray(arrayIndex) = 1
+      arrayIndex += 1
+    }
+
+    // phenotype covariates
+    covNames.foreach { covName =>
+      val thisCovData = covariateIndexToData(availableCovariateToIndex(covName)) 
+      sampleIndex = 0
+      while (sampleIndex < nSamples) {
+        if (sampleMask(sampleIndex)) {
+          covArray(arrayIndex) = thisCovData(sampleIndex)
+          arrayIndex += 1
+        }
+        sampleIndex += 1
+      }
+    }
+    
+    // variant covariates
+    val sampleMaskBc = vds.sparkContext.broadcast(sampleMask)  
+    
+    val covVariantWithGenotypes = vds
+      .filterVariantsList(covVariants.toSet, keep = true)
+      .rdd
+      .map { case (v, (va, gs)) => (v, RegressionUtils.hardCalls(gs, nMaskedSamples, sampleMaskBc.value).toArray) } // FIXME can speed up
+      .collect()
+    
+    if (covVariantWithGenotypes.size < covVariants.size) {
+      val missingVariants = covVariants.toSet.diff(covVariantWithGenotypes.map(_._1).toSet)
+      throw new RestFailure(s"VDS does not contain variant ${plural(missingVariants.size, "covariate")} ${missingVariants.mkString(", ")}")
+    }
+    
+    if (!covVariants.map(_.locus).forall(window.contains)) {
+      val outlierVariants = covVariants.filter(v => !window.contains(v.locus))
+      warn(s"Window ${windowToString(window)} does not contain variant ${plural(outlierVariants.size, "covariate")} ${outlierVariants.mkString(", ")}. This may increase latency.")
+    }
+    
+    var variantIndex = 0
+    while (variantIndex < covVariants.size) {
+      val thisCovGenotypes = covVariantWithGenotypes(variantIndex)._2
+      var maskedSampleIndex = 0
+      while (maskedSampleIndex < nMaskedSamples) {
+        covArray(arrayIndex) = thisCovGenotypes(maskedSampleIndex)
+        arrayIndex += 1
+        maskedSampleIndex += 1
+      }
+      variantIndex += 1
+    }
+    
+    val cov = new DenseMatrix[Double](nMaskedSamples, nCovs, covArray)
+    
+    (y, cov, sampleMask)
+  }
   
   def getStats(req: GetStatsRequest): GetStatsResult = {
     req.md_version.foreach { md_version =>
@@ -73,7 +168,7 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
     if (req.api_version != 1)
       throw new RestFailure(s"Unsupported API version `${req.api_version}'. Supported API versions: 1")
 
-    // check and construct pheno and covNames, and covVariants
+    // construct yName, and covNames, and covVariants
     val covNamesSet = mutable.Set[String]()
     val covVariantsSet = mutable.Set[Variant]()
     
@@ -118,19 +213,20 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
     val covNames = covNamesSet.toArray
     val covVariants = covVariantsSet.toArray
     
-    assert(covNamesSet.size == covNames.size)
     if (covNamesSet(yName))
       throw new RestFailure(s"$yName appears as both response phenotype and covariate")
 
-    // check and construct variant filters
+    // construct variant filters
     var chrom = ""
     
-    var minPos = 0
+    var minPos = 1
     var maxPos = Int.MaxValue // 2,147,483,647 is greater than length of longest chromosome
 
     var minMAC = 0
     var maxMAC = Int.MaxValue
 
+    val nonNegIntRegex = """\d+""".r
+    
     req.variant_filters.foreach(_.foreach { f =>
       f.operand match {
         case "chrom" =>
@@ -145,23 +241,31 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
         case "pos" =>
           if (f.operand_type != "integer")
             throw new RestFailure(s"pos filter operand_type must be 'integer': got '${f.operand_type}'")
-          f.operator match {
-            case "gte" => minPos = minPos max f.value.toInt
-            case "gt" => minPos = minPos max (f.value.toInt + 1)
-            case "lte" => maxPos = maxPos min f.value.toInt
-            case "lt" => maxPos = maxPos min (f.value.toInt - 1)
-            case "eq" => minPos = minPos max f.value.toInt; maxPos = maxPos min f.value.toInt
-            case other =>
-              throw new RestFailure(s"pos filter operator must be 'gte', 'gt', 'lte', 'lt', or 'eq': got '$other'")
+          else if (!nonNegIntRegex.matches(f.value))
+            throw new RestFailure(s"Value of position in variant_filter must be a valid non-negative integer: got '${f.value}'")
+          else {
+            val pos = f.value.toInt
+            f.operator match {
+              case "gte" => minPos = minPos max pos
+              case "gt" => minPos = minPos max (pos + 1)
+              case "lte" => maxPos = maxPos min pos
+              case "lt" => maxPos = maxPos min (pos - 1)
+              case "eq" => minPos = minPos max pos; maxPos = maxPos min pos
+              case other =>
+                throw new RestFailure(s"pos filter operator must be 'gte', 'gt', 'lte', 'lt', or 'eq': got '$other'")
+            }
           }
         case "mac" =>
           if (f.operand_type != "integer")
             throw new RestFailure(s"mac filter operand_type must be 'integer': got '${f.operand_type}'")
+          else if (!nonNegIntRegex.matches(f.value))
+            throw new RestFailure(s"mac filter value must be a valid non-negative integer: got '${f.value}'")
+          val mac = f.value.toInt
           f.operator match {
-            case "gte" => minMAC = minMAC max f.value.toInt
-            case "gt" => minMAC = minMAC max (f.value.toInt + 1)
-            case "lte" => maxMAC = maxMAC min f.value.toInt
-            case "lt" => maxMAC = maxMAC min (f.value.toInt - 1)
+            case "gte" => minMAC = minMAC max mac
+            case "gt" => minMAC = minMAC max (mac + 1)
+            case "lte" => maxMAC = maxMAC min mac
+            case "lt" => maxMAC = maxMAC min (mac - 1)
             case other =>
               throw new RestFailure(s"mac filter operator must be 'gte', 'gt', 'lte', 'lt': got '$other'")
           }
@@ -179,111 +283,22 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
     if (width < 0)
       throw new RestFailure(s"Window is empty: got start $minPos and end $maxPos")
     
-    info(s"Window is $chrom:$minPos-$maxPos. Width is $width.")
-    
     val window = Interval(Locus(chrom, minPos), Locus(chrom, maxPos + 1))
-
-    val windowedVds = vds.filterIntervals(IntervalTree(Array(window)), keep = true)   
+    val windowedVds = vds.filterIntervals(IntervalTree(Array(window)), keep = true)
     
-    def getPhenoCovMask(yName: String, covNames: Array[String], covVariants: Array[Variant] = Array.empty[Variant]): (DenseVector[Double], DenseMatrix[Double], Array[Boolean]) = {
-      // determine sample mask
-      val yCovIndices = (yName +: covNames).map(covariateIndices).sorted
-      
-      val sampleMask = Array.ofDim[Boolean](nSamples)
-      var nMaskedSamples = 0
-     
-      var i = 0
-      while (i < nSamples) {
-        val include = yCovIndices.forall(sampleMap(i)) // FIXME: this doesn't short circuit...
-        if (include) {
-          sampleMask(i) = true
-          nMaskedSamples += 1
-        }  
-        i += 1
-      }
-      
-      // phenotype y
-      val yArray = Array.ofDim[Double](nMaskedSamples)
-      val yAllSamples = allCovariateData(yName)
-      var j = 0
-      var k = 0
-      while (j < nSamples) {
-        if (sampleMask(j)) {
-          yArray(k) = yAllSamples(j)
-          k += 1
-        }
-        j += 1
-      }
+    info(s"Using window ${windowToString(window)} of size ${width + 1}")
 
-      // covariates
-      val nCovs = 1 + covNames.size + covVariants.size
-      val covArray = Array.ofDim[Double](nMaskedSamples * nCovs)
-      
-      // intercept
-      i = 0
-      while (i < nMaskedSamples) {
-        covArray(i) = 1
-        i += 1
-      }
-
-      // phenotypic covariates
-      k = nMaskedSamples
-      covNames.foreach { covName =>
-        val covAllSamples = allCovariateData(covName)
-        j = 0        
-        while (j < nSamples) {
-          if (sampleMask(j)) {
-            covArray(k) = covAllSamples(j)
-            k += 1
-          }
-          j += 1
-        }
-      }
-      
-      val covVariantsImmutSet = covVariantsSet.toSet
-      
-      // variant covariates FIXME: add variant covariates
-      val covVariantGenotypes = windowedVds
-        .filterVariantsList(covVariantsImmutSet, keep = true)
-        .rdd
-        .map { case (v, (va, gs)) => (v, RegressionUtils.hardCalls(gs, nMaskedSamples, sampleMask).toArray) } // FIXME can speed up
-        .collect()
-      
-      if (covVariantGenotypes.size < covVariants.size) {
-        val missingVariants = covVariantsImmutSet.diff(covVariantGenotypes.map(_._1).toSet)
-        throw new RestFailure(s"$missingVariants are missing from window or vds")
-      }  
-      
-      i = 0
-      while (i < covVariants.size) { 
-        j = 0
-        while (j < nMaskedSamples) {
-          covArray(k) = covVariantGenotypes(i)._2(j)
-          j += 1
-          k += 1
-        }
-        i += 1
-      }
-      
-      assert(k == covArray.size)
-      
-      val y = DenseVector(yArray)
-      val cov = new DenseMatrix[Double](nMaskedSamples, nCovs, covArray)
-      (y, cov, sampleMask)
-    }
-    
     if (req.count.getOrElse(false)) {
       val count = windowedVds.countVariants().toInt
       GetStatsResult(is_error = false, None, req.passback, None, None, Some(count)) // FIXME: make sure consistent with spec
     }
     else {
-      val (y, cov, sampleMask) = getPhenoCovMask(yName, covNames, covVariants)    
-      
+      val (y, cov, sampleMask) = getYCovSampleMask(window, yName, covNames, covVariants)    
       val restStatsRDD = LinearRegression.applyRest(windowedVds, y, cov, sampleMask, minMAC, maxMAC)
 
       var restStats =
         if (req.limit.isEmpty)
-          restStatsRDD.collect() // avoids first pass of take, modify if stats grows beyond memory capacity
+          restStatsRDD.collect() // avoids first pass of take, modify if stats exceed memory
         else {
           val limit = req.limit.get
           if (limit < 0)
@@ -294,31 +309,26 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
       if (restStats.size > hardLimit)
         restStats = restStats.take(hardLimit)
 
-      if (req.sort_by.isEmpty)
-        restStats = restStats.sortBy(s => (s.pos, s.ref, s.alt)) // FIXME: may be able to remove now
-      else {
-        val sortFields = req.sort_by.get
+      req.sort_by.foreach { sortFields => 
         if (!sortFields.areDistinct())
           throw new RestFailure("sort_by arguments must be distinct")
-
-        //      var fields = a.toList
-        //
-        //      // Default sort order is [pos, ref, alt] and sortBy is stable
-        //      if (fields.nonEmpty && fields.head == "pos") {
-        //        fields = fields.tail
-        //        if (fields.nonEmpty && fields.head == "ref") {
-        //          fields = fields.tail
-        //          if (fields.nonEmpty && fields.head == "alt")
-        //            fields = fields.tail
-        //        }
-        //      }
-
-        sortFields.reverse.foreach { f =>
+        
+        val nRedundant =
+          if (sortFields.endsWith(Array("pos", "ref", "alt")))
+            3
+          else if (sortFields.endsWith(Array("pos", "ref")))
+            2
+          else if (sortFields.endsWith(Array("pos")))
+            1
+          else
+            0
+        
+        sortFields.dropRight(nRedundant).reverse.foreach { f =>
           restStats = f match {
             case "pos" => restStats.sortBy(_.pos)
             case "ref" => restStats.sortBy(_.ref)
             case "alt" => restStats.sortBy(_.alt)
-            case "p-value" => restStats.sortBy(_.`p-value`.getOrElse(2d))
+            case "p-value" => restStats.sortBy(_.`p-value`.getOrElse(2d)) // missing values at end
             case _ => throw new RestFailure(s"Valid sort_by arguments are `pos', `ref', `alt', and `p-value': got $f")
           }
         }
