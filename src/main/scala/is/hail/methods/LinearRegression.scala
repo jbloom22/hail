@@ -75,8 +75,9 @@ object LinearRegression {
     }.copy(vaSignature = newVAS)
   }
   
-  // FIXME: refactor with above (change entry to linreg)
-  def applyRest(vds: VariantDataset, y: DenseVector[Double], cov: DenseMatrix[Double], sampleMask: Array[Boolean], minMAC: Int, maxMAC: Int): RDD[RestStat] = {
+  def applyRest(vds: VariantDataset, y: DenseVector[Double], cov: DenseMatrix[Double],
+    sampleMask: Array[Boolean], minMAC: Int, maxMAC: Int): RDD[RestStat] = {
+    
     require(vds.wasSplit)
     require(minMAC >= 0 && maxMAC >= minMAC)
 

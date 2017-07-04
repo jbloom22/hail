@@ -45,7 +45,7 @@ case class RestStat(chrom: String,
   pos: Int,
   ref: String,
   alt: String,
-  `p-value`: Option[Double]) // FIXME: rename pval
+  `p-value`: Option[Double])
 
 case class GetStatsResult(is_error: Boolean,
   error_message: Option[String],
@@ -59,12 +59,13 @@ class RestFailure(message: String) extends Exception(message) {
 }
 
 class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int, hardLimit: Int) { 
-  val availableCovariates: Set[String] = covariates.toSet
-  val availableCovariateToIndex: Map[String, Int] = covariates.zipWithIndex.toMap
-  val (sampleIndexToPresentness: Array[Array[Boolean]], covariateIndexToData: Array[Array[Double]]) = RegressionUtils.getSampleAndCovMaps(vds, covariates)
-  val nSamples: Int = vds.nSamples
-  val sampleMask: Array[Boolean] = Array.ofDim[Boolean](nSamples)
-  
+  private val nSamples: Int = vds.nSamples
+  private val sampleMask: Array[Boolean] = Array.ofDim[Boolean](nSamples)
+  private val availableCovariates: Set[String] = covariates.toSet
+  private val availableCovariateToIndex: Map[String, Int] = covariates.zipWithIndex.toMap
+  private val (sampleIndexToPresentness: Array[Array[Boolean]], 
+                 covariateIndexToValues: Array[Array[Double]]) = RegressionUtils.getSampleAndCovMaps(vds, covariates)
+ 
   def windowToString(window: Interval[Locus]): String =
     s"${window.start.contig}:${window.start.position}-${window.end.position - 1}"
   
@@ -78,14 +79,14 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
     var sampleIndex = 0
     while (sampleIndex < nSamples) {
       val include = yCovIndices.forall(sampleIndexToPresentness(sampleIndex))
-      sampleMask(sampleIndex) = include // FIXME: this doesn't short circuit...
+      sampleMask(sampleIndex) = include
       if (include) nMaskedSamples += 1
       sampleIndex += 1
     }
     
     // set y
     val yArray = Array.ofDim[Double](nMaskedSamples)
-    val yData = covariateIndexToData(availableCovariateToIndex(yName))
+    val yData = covariateIndexToValues(availableCovariateToIndex(yName))
     
     var arrayIndex = 0
     sampleIndex = 0
@@ -112,7 +113,7 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
 
     // phenotype covariates
     covNames.foreach { covName =>
-      val thisCovData = covariateIndexToData(availableCovariateToIndex(covName)) 
+      val thisCovData = covariateIndexToValues(availableCovariateToIndex(covName)) 
       sampleIndex = 0
       while (sampleIndex < nSamples) {
         if (sampleMask(sampleIndex)) {
@@ -129,7 +130,7 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
     val covVariantWithGenotypes = vds
       .filterVariantsList(covVariants.toSet, keep = true)
       .rdd
-      .map { case (v, (va, gs)) => (v, RegressionUtils.hardCalls(gs, nMaskedSamples, sampleMaskBc.value).toArray) } // FIXME can speed up
+      .map { case (v, (va, gs)) => (v, RegressionUtils.hardCalls(gs, nMaskedSamples, sampleMaskBc.value).toArray) }
       .collect()
     
     if (covVariantWithGenotypes.size < covVariants.size) {
@@ -168,7 +169,7 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
     if (req.api_version != 1)
       throw new RestFailure(s"Unsupported API version `${req.api_version}'. Supported API versions: 1")
 
-    // construct yName, and covNames, and covVariants
+    // construct yName, covNames, and covVariants
     val covNamesSet = mutable.Set[String]()
     val covVariantsSet = mutable.Set[Variant]()
     
@@ -273,6 +274,7 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
       }
     })
 
+    // construct window
     if (chrom.isEmpty)
       throw new RestFailure("No chromosome specified in variant_filter")
     
@@ -284,13 +286,15 @@ class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int,
       throw new RestFailure(s"Window is empty: got start $minPos and end $maxPos")
     
     val window = Interval(Locus(chrom, minPos), Locus(chrom, maxPos + 1))
-    val windowedVds = vds.filterIntervals(IntervalTree(Array(window)), keep = true)
     
     info(s"Using window ${windowToString(window)} of size ${width + 1}")
 
+    // filter and computer
+    val windowedVds = vds.filterIntervals(IntervalTree(Array(window)), keep = true)
+
     if (req.count.getOrElse(false)) {
       val count = windowedVds.countVariants().toInt
-      GetStatsResult(is_error = false, None, req.passback, None, None, Some(count)) // FIXME: make sure consistent with spec
+      GetStatsResult(is_error = false, None, req.passback, None, None, Some(count))
     }
     else {
       val (y, cov, sampleMask) = getYCovSampleMask(window, yName, covNames, covVariants)    

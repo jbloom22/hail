@@ -219,7 +219,7 @@ object RegressionUtils {
     
     val covArray = covIS.flatMap(_.map(_.getOrElse(Double.NaN))).toArray
     val cov = new DenseMatrix(rows = vds.nSamples, cols = covariates.size, data = covArray,
-      offset = 0, majorStride = covariates.size, isTranspose = true) // FIXME simplify?
+      offset = 0, majorStride = covariates.size, isTranspose = true)
     
     val covMap = covariates.indices.map(cov(::, _).toArray).toArray
     
