@@ -58,7 +58,7 @@ class RestFailure(message: String) extends Exception(message) {
   info(s"RestFailure: $message")
 }
 
-class RestService(vds: VariantDataset, covariates: Array[String], maxWidth: Int, hardLimit: Int) { 
+class ServiceLinreg(vds: VariantDataset, covariates: Array[String], maxWidth: Int, hardLimit: Int) { 
   private val nSamples: Int = vds.nSamples
   private val sampleMask: Array[Boolean] = Array.ofDim[Boolean](nSamples)
   private val availableCovariates: Set[String] = covariates.toSet

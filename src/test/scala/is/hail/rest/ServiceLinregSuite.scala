@@ -11,7 +11,7 @@ import org.hamcrest.Matchers._
 import _root_.is.hail.variant.VariantDataset
 import org.hamcrest.core.AnyOf
 
-class RestRunnable(hc: HailContext) extends Runnable {
+class ServiceLinregRunnable(hc: HailContext) extends Runnable {
   var task: Server = _
 
   override def run() {
@@ -24,7 +24,7 @@ class RestRunnable(hc: HailContext) extends Runnable {
     
     val covariates = sampleKT.fieldNames.filterNot(_ == "IID").map("sa.rest." + _)
     
-    val restService = new RestService(vds, covariates, 600000, 100000)
+    val restService = new ServiceLinreg(vds, covariates, 600000, 100000)
 
     task = BlazeBuilder.bindHttp(8080)
       .mountService(restService.service, "/")
@@ -35,11 +35,11 @@ class RestRunnable(hc: HailContext) extends Runnable {
   }
 }
 
-class RestSuite extends SparkSuite {
+class ServiceLinregSuite extends SparkSuite {
 
   @Test def test() {
     
-    val r = new RestRunnable(hc)
+    val r = new ServiceLinregRunnable(hc)
     val t = new Thread(r)
     t.start()
 

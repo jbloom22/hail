@@ -1440,7 +1440,6 @@ class VariantDataset(object):
         :param bool overwrite: If true, overwrite any existing VDS file. Cannot be used to read from and write to the same path.
 
         :param bool parquet_genotypes: If true, store genotypes as Parquet rather than Hail's serialization.  The resulting VDS will be larger and slower in Hail but the genotypes will be accessible from other tools that support Parquet.
-
         """
 
         if self._is_generic_genotype:
@@ -3956,12 +3955,34 @@ class VariantDataset(object):
 
         :param bool shuffle: If true, use full shuffle to repartition.
 
-        :return: Variant dataset with the number of partitions equal to at most ``num_partitions``
+        :return: Variant dataset with the number of partitions equal to at most ``num_partitions``.
         :rtype: :class:`.VariantDataset`
         """
 
         jvds = self._jvdf.coalesce(num_partitions, shuffle)
         return VariantDataset(self.hc, jvds)
+
+    @handle_py4j
+    @requireTGenotype
+    @typecheck_method(covariates=listof(strlike),
+                      port=integral,
+                      max_width = integral,
+                      hard_limit = integral)
+    def server_linreg(self, covariates=[], port=8080, max_width=1000000, hard_limit=100000):
+        """Launch a REST API process for requesting linear regression p-values on windows.
+        
+        :param covariates: list of covariate sample annotation paths.
+        :type covariates: list of str
+        
+        :param int port: Port on which to listen for requests.
+        
+        :param int max_width: Maximum width of window.
+        
+        :param int hard_limit: Maximum number of variants returned.
+        """
+        
+        self._jvds.serverLinreg(jarray(Env.jvm().java.lang.String, covariates), port, max_width, hard_limit)
+
 
     @handle_py4j
     @typecheck_method(force_block=bool,

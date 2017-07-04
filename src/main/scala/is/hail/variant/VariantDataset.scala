@@ -11,6 +11,7 @@ import is.hail.io.plink.ExportBedBimFam
 import is.hail.io.vcf.{BufferedLineIterator, ExportVCF}
 import is.hail.keytable.KeyTable
 import is.hail.methods._
+import is.hail.rest.ServerLinreg
 import is.hail.sparkextras.{OrderedPartitioner, OrderedRDD}
 import is.hail.stats.ComputeRRM
 import is.hail.utils._
@@ -661,6 +662,9 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
 
   def sampleQC(root: String = "sa.qc", keepStar: Boolean = false): VariantDataset = SampleQC(vds, root, keepStar)
 
+  def serverLinreg(covariates: Array[String], port: Int = 8080, maxWidth: Int = 600000, hardLimit: Int = 100000) = 
+    ServerLinreg(vds, covariates, port, maxWidth, hardLimit)
+  
   def rrm(forceBlock: Boolean = false, forceGramian: Boolean = false): KinshipMatrix = {
     requireSplit("rrm")
     info(s"rrm: Computing Realized Relationship Matrix...")
