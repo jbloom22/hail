@@ -445,7 +445,7 @@ output:
       extern double intl,ersm;
       extern int r,lim; extern real c;
       extern int *n,*th; extern real *lb,*nc;
-      real qfval;
+      real qfval = 0.0;
       static int rats[]={1,2,4,8};
 
       if (setjmp(env) != 0) { *ifault=4; goto endofproc; }
