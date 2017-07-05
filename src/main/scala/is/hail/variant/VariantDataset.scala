@@ -7,7 +7,7 @@ import is.hail.io.plink.ExportBedBimFam
 import is.hail.io.vcf.{BufferedLineIterator, ExportVCF}
 import is.hail.keytable.KeyTable
 import is.hail.methods._
-import is.hail.rest.ServerLinreg
+import is.hail.rest.RestServerLinreg
 import is.hail.stats.ComputeRRM
 import is.hail.utils._
 import is.hail.variant.Variant.orderedKey
@@ -653,11 +653,11 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
 
   def sampleQC(root: String = "sa.qc", keepStar: Boolean = false): VariantDataset = SampleQC(vds, root, keepStar)
 
-  def serverLinreg(covariates: Array[String] = Array.empty[String],
+  def restServerLinreg(covariates: Array[String] = Array.empty[String], useDosages: Boolean = false,
     port: Int = 8080, maxWidth: Int = 1000000, hardLimit: Int = 100000) {
     requireSplit("server linear regression")
     
-    ServerLinreg(vds, covariates, port, maxWidth, hardLimit)
+    RestServerLinreg(vds, covariates, useDosages, port, maxWidth, hardLimit)
   }
   
   def rrm(forceBlock: Boolean = false, forceGramian: Boolean = false): KinshipMatrix = {

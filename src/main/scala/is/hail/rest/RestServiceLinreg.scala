@@ -41,7 +41,7 @@ case class GetStatsRequest(passback: Option[String],
   count: Option[Boolean],
   sort_by: Option[Array[String]])
 
-case class RestStat(chrom: String,
+case class RestLinregStat(chrom: String,
   pos: Int,
   ref: String,
   alt: String,
@@ -50,7 +50,7 @@ case class RestStat(chrom: String,
 case class GetStatsResult(is_error: Boolean,
   error_message: Option[String],
   passback: Option[String],
-  stats: Option[Array[RestStat]],
+  stats: Option[Array[RestLinregStat]],
   nsamples: Option[Int],
   count: Option[Int])
 
@@ -58,19 +58,22 @@ class RestFailure(message: String) extends Exception(message) {
   info(s"RestFailure: $message")
 }
 
-class ServiceLinreg(vds: VariantDataset, covariates: Array[String], maxWidth: Int, hardLimit: Int) { 
+class RestServiceLinreg(vds: VariantDataset, covariates: Array[String], useDosages: Boolean, maxWidth: Int, hardLimit: Int) { 
   private val nSamples: Int = vds.nSamples
   private val sampleMask: Array[Boolean] = Array.ofDim[Boolean](nSamples)
   private val availableCovariates: Set[String] = covariates.toSet
   private val availableCovariateToIndex: Map[String, Int] = covariates.zipWithIndex.toMap
   private val (sampleIndexToPresentness: Array[Array[Boolean]], 
                  covariateIndexToValues: Array[Array[Double]]) = RegressionUtils.getSampleAndCovMaps(vds, covariates)
- 
+  
   def windowToString(window: Interval[Locus]): String =
     s"${window.start.contig}:${window.start.position}-${window.end.position - 1}"
   
-  def getYCovSampleMask(window: Interval[Locus],yName: String, covNames: Array[String],
-    covVariants: Array[Variant] = Array.empty[Variant]): (DenseVector[Double], DenseMatrix[Double], Array[Boolean]) = {
+  def getYCovSampleMask(window: Interval[Locus],
+    yName: String,
+    covNames: Array[String],
+    covVariants: Array[Variant] = Array.empty[Variant],
+    useDosages: Boolean): (DenseVector[Double], DenseMatrix[Double], Array[Boolean]) = {
     
     // sample mask
     val yCovIndices = (yName +: covNames).map(availableCovariateToIndex).sorted
@@ -129,9 +132,13 @@ class ServiceLinreg(vds: VariantDataset, covariates: Array[String], maxWidth: In
     val covVariantWithGenotypes = vds
       .filterVariantsList(covVariants.toSet, keep = true)
       .rdd
-      .map { case (v, (va, gs)) => (v, RegressionUtils.hardCalls(gs, nMaskedSamples, sampleMaskBc.value).toArray) }
+      .map { case (v, (va, gs)) => (v,
+        if (!useDosages)
+          RegressionUtils.hardCalls(gs, nMaskedSamples, sampleMaskBc.value).toArray
+        else
+          RegressionUtils.dosages(gs, nMaskedSamples, sampleMaskBc.value).toArray) }
       .collect()
-    
+
     if (covVariantWithGenotypes.size < covVariants.size) {
       val missingVariants = covVariants.toSet.diff(covVariantWithGenotypes.map(_._1).toSet)
       throw new RestFailure(s"VDS does not contain variant ${plural(missingVariants.size, "covariate")} ${missingVariants.mkString(", ")}")
@@ -157,6 +164,7 @@ class ServiceLinreg(vds: VariantDataset, covariates: Array[String], maxWidth: In
     
     (y, cov, sampleMask)
   }
+  
   
   def getStats(req: GetStatsRequest): GetStatsResult = {
     req.md_version.foreach { md_version =>
@@ -295,8 +303,8 @@ class ServiceLinreg(vds: VariantDataset, covariates: Array[String], maxWidth: In
       GetStatsResult(is_error = false, None, req.passback, None, None, Some(count))
     }
     else {
-      val (y, cov, sampleMask) = getYCovSampleMask(window, yName, covNames, covVariants)    
-      val restStatsRDD = LinearRegression.applyRest(windowedVds, y, cov, sampleMask, minMAC, maxMAC)
+      val (y, cov, sampleMask) = getYCovSampleMask(window, yName, covNames, covVariants, useDosages)    
+      val restStatsRDD = LinearRegression.applyRest(windowedVds, y, cov, sampleMask, useDosages, minMAC, maxMAC)
 
       var restStats =
         if (req.limit.isEmpty)

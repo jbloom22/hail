@@ -3965,24 +3965,26 @@ class VariantDataset(object):
     @handle_py4j
     @requireTGenotype
     @typecheck_method(covariates=listof(strlike),
+                      use_dosages=bool,
                       port=integral,
                       max_width = integral,
                       hard_limit = integral)
-    def server_linreg(self, covariates=[], port=8080, max_width=1000000, hard_limit=100000):
-        """Launch a REST API process for requesting linear regression p-values on windows.
+    def rest_server_linreg(self, covariates=[], use_dosages=False, port=8080, max_width=1000000, hard_limit=100000):
+        """Launch a REST server for linear regression p-values on windows.
         
-        :param covariates: list of covariate sample annotation paths.
+        :param covariates: list of sample annotation paths to make available as phenotypes and covariates
         :type covariates: list of str
+        
+        :param bool use_dosages: If true, use dosages rather than hard call genotypes.
         
         :param int port: Port on which to listen for requests.
         
-        :param int max_width: Maximum width of window.
+        :param int max_width: Maximum width of window on chromosome in base pairs.
         
         :param int hard_limit: Maximum number of variants returned.
         """
         
-        self._jvdf.serverLinreg(jarray(Env.jvm().java.lang.String, covariates), port, max_width, hard_limit)
-
+        self._jvdf.restServerLinreg(jarray(Env.jvm().java.lang.String, covariates), use_dosages, port, max_width, hard_limit)
 
     @handle_py4j
     @typecheck_method(force_block=bool,

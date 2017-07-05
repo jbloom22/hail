@@ -3,7 +3,7 @@ package is.hail.methods
 import breeze.linalg._
 import is.hail.annotations.Annotation
 import is.hail.expr._
-import is.hail.rest.RestStat
+import is.hail.rest.RestLinregStat
 import is.hail.stats._
 import is.hail.utils._
 import is.hail.variant._
@@ -76,7 +76,7 @@ object LinearRegression {
   }
   
   def applyRest(vds: VariantDataset, y: DenseVector[Double], cov: DenseMatrix[Double],
-    sampleMask: Array[Boolean], minMAC: Int, maxMAC: Int): RDD[RestStat] = {
+    sampleMask: Array[Boolean], useDosages: Boolean, minMAC: Int, maxMAC: Int): RDD[RestLinregStat] = {
     
     require(vds.wasSplit)
     require(minMAC >= 0 && maxMAC >= minMAC)
@@ -93,7 +93,7 @@ object LinearRegression {
     val upperMinAC = 2 * n - lowerMaxAC
     val upperMaxAC = 2 * n - lowerMinAC
     
-    def inRange(ac: Int): Boolean = (ac >= lowerMinAC && ac <= lowerMaxAC) || (ac >= upperMinAC && ac <= upperMaxAC)
+    def inRange(ac: Double): Boolean = (ac >= lowerMinAC && ac <= lowerMaxAC) || (ac >= upperMinAC && ac <= upperMaxAC)
     
     info(s"Running linear regression on $n samples with $k ${ plural(k, "covariate") } including intercept...")
 
@@ -108,10 +108,16 @@ object LinearRegression {
     val yypBc = sc.broadcast((y dot y) - (Qty dot Qty))
 
     vds.rdd.map { case (v, (va, gs)) =>
-      val (x: SparseVector[Double], ac) = RegressionUtils.hardCallsWithAC(gs, n, sampleMaskBc.value)
+      val (x: Vector[Double], ac) =
+        if (!useDosages) // replace by hardCalls in 0.2, with ac post-imputation
+          RegressionUtils.hardCallsWithAC(gs, n, sampleMaskBc.value)
+        else {
+          val x0 = RegressionUtils.dosages(gs, n, sampleMaskBc.value)
+          (x0, sum(x0))
+        }
 
       val optPval =
-        if (inRange(ac.toInt)) {
+        if (inRange(ac)) {
           val pval = LinearRegressionModel.fit(x, yBc.value, yypBc.value, QtBc.value, QtyBc.value, d).p
           if (!pval.isNaN)
             Some(pval)
@@ -121,7 +127,7 @@ object LinearRegression {
         else
           None
 
-      RestStat(v.contig, v.start, v.ref, v.alt, optPval)
+      RestLinregStat(v.contig, v.start, v.ref, v.alt, optPval)
     }
   }
 }

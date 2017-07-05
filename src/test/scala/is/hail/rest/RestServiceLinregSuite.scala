@@ -11,19 +11,18 @@ import org.hamcrest.Matchers._
 import _root_.is.hail.variant.VariantDataset
 import org.hamcrest.core.AnyOf
 
-class ServiceLinregRunnable(hc: HailContext) extends Runnable {
+class RestServiceLinregRunnable(hc: HailContext) extends Runnable {
   var task: Server = _
 
   override def run() {
-
-    val sampleKT = hc.importTable("src/test/resources/rest.cov", impute = true).keyBy("IID")
-        
-    val vds: VariantDataset = hc.importVCF("src/test/resources/rest.vcf", nPartitions = Some(2))
-      .annotateSamplesTable(sampleKT, root="sa.rest")
+    val sampleKT = hc.importTable("src/test/resources/restServerLinreg.cov", impute = true).keyBy("IID")
     
+    val vds: VariantDataset = hc.importVCF("src/test/resources/restServerLinreg.vcf", nPartitions = Some(2))
+      .annotateSamplesTable(sampleKT, root="sa.rest")
+   
     val covariates = sampleKT.fieldNames.filterNot(_ == "IID").map("sa.rest." + _)
     
-    val restService = new ServiceLinreg(vds, covariates, 600000, 100000)
+    val restService = new RestServiceLinreg(vds, covariates, useDosages = false, maxWidth = 1000000, hardLimit = 100000)
 
     task = BlazeBuilder.bindHttp(8080)
       .mountService(restService.service, "/")
@@ -34,51 +33,27 @@ class ServiceLinregRunnable(hc: HailContext) extends Runnable {
   }
 }
 
-class ServiceLinregSuite extends SparkSuite {
-  @Test def localServerTest() {
-    val sampleKT = hc.importTable("src/test/resources/rest.cov", impute = true).keyBy("IID")
-    val vds: VariantDataset = hc.importVCF("src/test/resources/rest.vcf", nPartitions = Some(2))
+class RestServiceLinregSuite extends SparkSuite {
+  
+  // run to test server
+  def localRestServerTest() {
+    val sampleKT = hc.importTable("src/test/resources/restServerLinreg.cov", impute = true).keyBy("IID")
+    val vds: VariantDataset = hc.importVCF("src/test/resources/restServerLinreg.vcf", nPartitions = Some(2))
       .annotateSamplesTable(sampleKT, root="sa.rest")
     val covariates = sampleKT.fieldNames.filterNot(_ == "IID").map("sa.rest." + _)
     
-    vds.serverLinreg(covariates, 6060)
-  }
-
-  def createVds() {
-    val vds: VariantDataset = hc.importVCF("/Users/jbloom/data/profile.10k.vcf")
-      .filterMulti()
-      .annotateSamplesExpr("sa.pheno = rnorm(0,1), sa.cov1 = rnorm(0,1), sa.cov2 = rnorm(0,1), sa.cov3 = rnorm(0,1), sa.cov4 = rnorm(0,1), sa.cov5 = rnorm(0,1), sa.cov6 = rnorm(0,1), sa.cov7 = rnorm(0,1), sa.cov8 = rnorm(0,1)")
-
-    vds.write("/Users/jbloom/data/rest_api/profile.10k.vds")
-  }
-  
-  @Test def localServerTestLarge() {
-    val vds = hc.readVDS("/Users/jbloom/data/rest_api/profile.10k.vds")
-    val covariates = Array("sa.pheno", "sa.cov1", "sa.cov2", "sa.cov3", "sa.cov4", "sa.cov5", "sa.cov6", "sa.cov7", "sa.cov8")    
-
-    vds.serverLinreg(covariates, 6060)
+    vds.restServerLinreg(covariates, port=6060)
   }
 
   
   @Test def test() {
     
-    val r = new ServiceLinregRunnable(hc)
+    val r = new RestServiceLinregRunnable(hc)
     val t = new Thread(r)
     t.start()
 
-    Thread.sleep(8000) // FIXME: This is a hack
-
-// FIXME: How do I test if server is up?
-//    var isUnavailable = true
-//    var nAttempts = 0
-//    do {
-//      Thread.sleep(1000)
-//      nAttempts += 1
-//      if ()
-//        isUnavailable = false
-//    } while (isUnavailable && nAttempts < 20)
-//  }
-
+    Thread.sleep(8000) // Hack to give the server time to initialize
+    
     /*
     Sample code for generating p-values in R (below, missing genotypes are imputed using all samples; use subset when using BMI or HEIGHT):
     df = read.table("t2dserverR.tsv", header = TRUE)
@@ -163,8 +138,6 @@ class ServiceLinregSuite extends SparkSuite {
         .body("nsamples", is(5))
         .extract()
         .response()
-
-    println(response.asString())
 
     response =
       given()
