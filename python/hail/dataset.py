@@ -4279,6 +4279,65 @@ class VariantDataset(object):
         return VariantDataset(self.hc, self._jvds.deleteVaAttribute(ann_path, attribute))
 
     @handle_py4j
+    @typecheck_method(key_name=strlike,
+                      variant_keys=strlike,
+                      single_key=bool,
+                      weight_expr=strlike,
+                      y=strlike,
+                      covariates=listof(strlike))
+    def skat(self, key_name, variant_keys, single_key, weight_expr, y, covariates=[]):
+        r"""Test each keyed group of variants for association by linear SKAT test.
+
+        .. include:: requireTGenotype.rst
+
+        **Examples**
+
+        Run a gene test using linear SKAT. Here ``va.genes`` is a variant
+        annotation of type Set[String] giving the set of genes containing the variant:
+
+        # >>> skat_kt = (hc.read('data/example_skat.vds')
+        # ...     .skat(key_name='gene',
+        # ...           variant_keys='va.genes',
+        # ...           single_key=False,
+        # ...           weight='va.weight',
+        # ...           y='sa.burden.pheno',
+        # ...           covariates=['sa.cov1', 'sa.cov2']))
+
+        .. caution::
+
+          With ``single_key=False``, ``variant_keys`` expects a variant annotation of Set or Array type, in order to
+          allow each variant to have zero, one, or more keys (for example, the same variant may appear in multiple
+          genes). Unlike with type Set, if the same key appears twice in a variant annotation of type Array, then that
+          variant will be counted twice in that key's group. With ``single_key=True``, ``variant_keys`` expects a
+          variant annotation whose value is itself the key of interest. In bose cases, variants with missing keys are
+          ignored.
+
+        **Notes**
+        
+        Add notes here.
+
+        :param str key_name: Name to assign to key column of returned key tables.
+
+        :param str variant_keys: Variant annotation path for the TArray or TSet of keys associated to each variant.
+
+        :param bool single_key: If true, ``variant_keys`` is interpreted as a single (or missing) key per variant,
+                                rather than as a collection of keys.
+
+        :param str weight: Variant expression for SKAT weight.
+
+        :param str y: Response expression.
+
+        :param covariates: list of covariate expressions.
+        :type covariates: list of str
+
+        :return: Key table of SKAT results.
+        :rtype: :py:class:`.KeyTable`
+        """
+
+        return KeyTable(self.hc, self._jvdf.skat(key_name, variant_keys, single_key, weight_expr, y,
+                                    jarray(Env.jvm().java.lang.String, covariates)))
+
+    @handle_py4j
     @requireTGenotype
     @typecheck_method(propagate_gq=bool,
                       keep_star_alleles=bool,

@@ -680,6 +680,13 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
     maxShift: Int = 100): VariantDataset = {
     SplitMulti(vds, propagateGQ, keepStar, maxShift)
   }
+  
+  def skat(keyName: String, variantKeys: String, singleKey: Boolean, weightExpr: String, y: String, covariates: Array[String] = Array.empty[String]): KeyTable = {
+    requireSplit("skat")
+    vds.requireSampleTString("skat")
+    
+    Skat(vds, keyName, variantKeys, singleKey, weightExpr, y, covariates)
+  }
 
   def tdt(ped: Pedigree, tdtRoot: String = "va.tdt"): VariantDataset = {
     requireSplit("TDT")
