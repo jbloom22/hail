@@ -1,11 +1,10 @@
 package is.hail.rest
 
-import breeze.linalg.{DenseMatrix, DenseVector, Vector, qr, sum}
-import is.hail.stats.{LinearRegressionModel, RegressionUtils}
+import breeze.linalg.DenseMatrix
+import is.hail.stats.{RegressionUtils, ToNormalizedIndexedRowMatrix}
 import is.hail.variant._
 import is.hail.utils._
 import is.hail.variant.VariantDataset
-import org.apache.spark.rdd.RDD
 import org.http4s.headers.`Content-Type`
 import org.http4s._
 import org.http4s.MediaType._
@@ -19,88 +18,28 @@ import org.json4s.jackson.Serialization.{read, write}
 
 import scala.collection.mutable
 
-case class GetLinregRequest(passback: Option[String],
+case class GetScoreCovarianceRequest(passback: Option[String],
   md_version: Option[String],
   api_version: Int,
   phenotype: Option[String],
   covariates: Option[Array[Covariate]],
   variant_filters: Option[Array[VariantFilter]],
+  variant_list: Option[Array[SingleVariant]],
+  compute_cov: Option[Boolean],
   limit: Option[Int],
-  count: Option[Boolean],
-  sort_by: Option[Array[String]])
-
-case class LinregStat(chrom: String,
-  pos: Int,
-  ref: String,
-  alt: String,
-  `p-value`: Option[Double])
-
-case class GetLinregResult(is_error: Boolean,
+  count: Option[Boolean])
+  
+case class GetScoreCovarianceResult(is_error: Boolean,
   error_message: Option[String],
   passback: Option[String],
-  stats: Option[Array[LinregStat]],
+  active_variants: Option[Array[SingleVariant]],
+  scores: Option[Array[Double]],
+  covariance: Option[Array[Double]],
+  sigma_sq: Option[Double],
   nsamples: Option[Int],
   count: Option[Int])
 
-object RestServiceLinreg {
-  def linreg(vds: VariantDataset, y: DenseVector[Double], cov: DenseMatrix[Double],
-    sampleMask: Array[Boolean], useDosages: Boolean, minMAC: Int, maxMAC: Int): RDD[LinregStat] = {
-    
-    require(vds.wasSplit)
-    require(minMAC >= 0 && maxMAC >= minMAC)
-
-    val n = y.size
-    val k = cov.cols
-    val d = n - k - 1
-    
-    if (d < 1)
-      fatal(s"$n samples and $k ${ plural(k, "covariate") } including intercept implies $d degrees of freedom.")
-    
-    val lowerMinAC = 1 max minMAC
-    val lowerMaxAC = n min maxMAC
-    val upperMinAC = 2 * n - lowerMaxAC
-    val upperMaxAC = 2 * n - lowerMinAC
-    
-    def inRange(ac: Double): Boolean = (ac >= lowerMinAC && ac <= lowerMaxAC) || (ac >= upperMinAC && ac <= upperMaxAC)
-    
-    info(s"Running linear regression on $n samples with $k ${ plural(k, "covariate") } including intercept...")
-
-    val Qt = qr.reduced.justQ(cov).t
-    val Qty = Qt * y
-
-    val sc = vds.sparkContext
-    val sampleMaskBc = sc.broadcast(sampleMask)
-    val yBc = sc.broadcast(y)
-    val QtBc = sc.broadcast(Qt)
-    val QtyBc = sc.broadcast(Qty)
-    val yypBc = sc.broadcast((y dot y) - (Qty dot Qty))
-
-    vds.rdd.map { case (v, (va, gs)) =>
-      val (x: Vector[Double], ac) =
-        if (!useDosages) // replace by hardCalls in 0.2, with ac post-imputation
-          RegressionUtils.hardCallsWithAC(gs, n, sampleMaskBc.value)
-        else {
-          val x0 = RegressionUtils.dosages(gs, n, sampleMaskBc.value)
-          (x0, sum(x0))
-        }
-
-      val optPval =
-        if (inRange(ac)) {
-          val pval = LinearRegressionModel.fit(x, yBc.value, yypBc.value, QtBc.value, QtyBc.value, d).p
-          if (!pval.isNaN)
-            Some(pval)
-          else
-            None
-        }
-        else
-          None
-
-      LinregStat(v.contig, v.start, v.ref, v.alt, optPval)
-    }
-  }
-}
-
-class RestServiceLinreg(vds: VariantDataset, covariates: Array[String], useDosages: Boolean, maxWidth: Int, hardLimit: Int) { 
+class RestServiceScoreCovariance(vds: VariantDataset, covariates: Array[String], useDosages: Boolean, maxWidth: Int, hardLimit: Int) { 
   private val nSamples: Int = vds.nSamples
   private val sampleMask: Array[Boolean] = Array.ofDim[Boolean](nSamples)
   private val availableCovariates: Set[String] = covariates.toSet
@@ -108,7 +47,7 @@ class RestServiceLinreg(vds: VariantDataset, covariates: Array[String], useDosag
   private val (sampleIndexToPresentness: Array[Array[Boolean]], 
                  covariateIndexToValues: Array[Array[Double]]) = RegressionUtils.getSampleAndCovMaps(vds, covariates)
   
-  def getStats(req: GetLinregRequest): GetLinregResult = {
+  def getStats(req: GetScoreCovarianceRequest): GetScoreCovarianceResult = {
     req.md_version.foreach { md_version =>
       if (md_version != "mdv1")
         throw new RestFailure(s"Unknown md_version `$md_version'. Available md_versions: mdv1")
@@ -153,17 +92,17 @@ class RestServiceLinreg(vds: VariantDataset, covariates: Array[String], useDosag
         }
     }
     
-    val yName = req.phenotype.getOrElse {
-      throw new RestFailure("Missing required field: phenotype")
-    }
-    if (!availableCovariates(yName))
-      throw new RestFailure(s"$yName is not a valid phenotype name")
-    
     val covNames = covNamesSet.toArray
     val covVariants = covVariantsSet.toArray
     
-    if (covNamesSet(yName))
-      throw new RestFailure(s"$yName appears as both response phenotype and covariate")
+    val yNameOpt = req.phenotype
+      
+    yNameOpt.foreach { yName =>
+      if (!availableCovariates(yName))
+        throw new RestFailure(s"$yName is not a valid phenotype name")
+      if (covNamesSet(yName))
+        throw new RestFailure(s"$yName appears as both response phenotype and covariate")
+    }
 
     // construct variant filters
     var chrom = ""
@@ -174,7 +113,7 @@ class RestServiceLinreg(vds: VariantDataset, covariates: Array[String], useDosag
     var minMAC = 1
     var maxMAC = Int.MaxValue
 
-    val nonNegIntRegex = """\d+""".r
+    val nonNegIntRegEx = """\d+""".r
     
     req.variant_filters.foreach(_.foreach { f =>
       f.operand match {
@@ -190,7 +129,7 @@ class RestServiceLinreg(vds: VariantDataset, covariates: Array[String], useDosag
         case "pos" =>
           if (f.operand_type != "integer")
             throw new RestFailure(s"pos filter operand_type must be 'integer': got '${f.operand_type}'")
-          else if (!nonNegIntRegex.matches(f.value))
+          else if (!nonNegIntRegEx.matches(f.value))
             throw new RestFailure(s"Value of position in variant_filter must be a valid non-negative integer: got '${f.value}'")
           else {
             val pos = f.value.toInt
@@ -207,7 +146,7 @@ class RestServiceLinreg(vds: VariantDataset, covariates: Array[String], useDosag
         case "mac" =>
           if (f.operand_type != "integer")
             throw new RestFailure(s"mac filter operand_type must be 'integer': got '${f.operand_type}'")
-          else if (!nonNegIntRegex.matches(f.value))
+          else if (!nonNegIntRegEx.matches(f.value))
             throw new RestFailure(s"mac filter value must be a valid non-negative integer: got '${f.value}'")
           val mac = f.value.toInt
           f.operator match {
@@ -237,58 +176,87 @@ class RestServiceLinreg(vds: VariantDataset, covariates: Array[String], useDosag
     
     info(s"Using window ${RestServer.windowToString(window)} of size ${width + 1}")
 
-    // filter and compute
-    val windowedVds = vds.filterIntervals(IntervalTree(Array(window)), keep = true)
+    val variantsSet = mutable.Set[Variant]()
     
-    if (req.count.getOrElse(false)) {
-      val count = windowedVds.countVariants().toInt
-      
-      GetLinregResult(is_error = false, None, req.passback, None, None, Some(count))
-    }
-    else {
-      val (Some(y), cov) = RestServer.getYCovAndSetMask(sampleMask, vds, window, Some(yName), covNames, covVariants,
-        useDosages, availableCovariates, availableCovariateToIndex, sampleIndexToPresentness, covariateIndexToValues)    
-
-      val restStatsRDD = RestServiceLinreg.linreg(windowedVds, y, cov, sampleMask, useDosages, minMAC, maxMAC)
-
-      var restStats =
-        if (req.limit.isEmpty)
-          restStatsRDD.collect() // avoids first pass of take, modify if stats exceed memory
-        else {
-          val limit = req.limit.get
-          if (limit < 0)
-            throw new RestFailure(s"limit must be non-negative: got $limit")
-          restStatsRDD.take(limit)
+    req.variant_list.foreach { _.foreach { sv =>
+      val v =
+        if (sv.chrom.isDefined && sv.pos.isDefined && sv.ref.isDefined && sv.alt.isDefined) {
+          val v = Variant(sv.chrom.get, sv.pos.get, sv.ref.get, sv.alt.get)
+          if (v.contig != chrom || v.start < minPos || v.start > maxPos)
+            throw new RestFailure(s"Variant ${v.toString} from 'variant_list' is not in the window ${RestServer.windowToString(window)}")
+          variantsSet += v
         }
-
-      if (restStats.size > hardLimit)
-        restStats = restStats.take(hardLimit)
-
-      req.sort_by.foreach { sortFields => 
-        if (!sortFields.areDistinct())
-          throw new RestFailure("sort_by arguments must be distinct")
-        
-        val nRedundant =
-          if (sortFields.endsWith(Array("pos", "ref", "alt")))
-            3
-          else if (sortFields.endsWith(Array("pos", "ref")))
-            2
-          else if (sortFields.endsWith(Array("pos")))
-            1
-          else
-            0
-        
-        sortFields.dropRight(nRedundant).reverse.foreach { f =>
-          restStats = f match {
-            case "pos" => restStats.sortBy(_.pos)
-            case "ref" => restStats.sortBy(_.ref)
-            case "alt" => restStats.sortBy(_.alt)
-            case "p-value" => restStats.sortBy(_.`p-value`.getOrElse(2d)) // missing values at end
-            case _ => throw new RestFailure(s"Valid sort_by arguments are `pos', `ref', `alt', and `p-value': got $f")
-          }
+        else
+          throw new RestFailure(s"All variants in 'variant_list' must include 'chrom', 'pos', 'ref', and 'alt' fields: got ${(sv.chrom.getOrElse("NA"), sv.pos.getOrElse("NA"), sv.ref.getOrElse("NA"),sv.alt.getOrElse("NA"))}")
         }
       }
-      GetLinregResult(is_error = false, None, req.passback, Some(restStats), Some(y.size), Some(restStats.size))
+    
+    // filter and compute
+    val filteredVds =
+      if (variantsSet.isEmpty)
+        vds.filterIntervals(IntervalTree(Array(window)), keep = true)
+      else
+        vds.filterVariantsList(variantsSet.toSet, keep = true)
+
+    if (req.count.getOrElse(false)) {
+      val count = filteredVds.countVariants().toInt
+      GetScoreCovarianceResult(is_error = false, None, req.passback, None, None, None, None, None, Some(count))
+    }
+    else {
+      val (yOpt, cov) = RestServer.getYCovAndSetMask(sampleMask, vds, window, yNameOpt, covNames, covVariants,
+        useDosages, availableCovariates, availableCovariateToIndex, sampleIndexToPresentness, covariateIndexToValues)    
+      
+      val activeVariants = filteredVds.variants.collect().map( v =>
+        SingleVariant(Some(v.contig), Some(v.start), Some(v.ref), Some(v.alt)))
+      
+//      val covariance = filteredVds.ldMatrix().matrix.toBlockMatrix().toLocalMatrix().toArray // FIXME: replace with upper triangular
+
+      val X = ToNormalizedIndexedRowMatrix(filteredVds)
+      
+      val Xb = X.toBlockMatrix()
+      
+      val covariance = Xb.multiply(Xb.transpose).toLocalMatrix().toArray
+      
+      import org.apache.spark.mllib.linalg.{DenseMatrix => SparkDenseMatrix}
+      
+      val scoresOpt: Option[Array[Double]] = yOpt.map { y =>
+        val yMat = new SparkDenseMatrix(1, y.length, y.toArray, true)
+        X.multiply(yMat).toBlockMatrix().toLocalMatrix().toArray
+      }
+      
+      val sigmaSqOpt: Option[Double] = yOpt.map(stuff => 0d) // FIXME
+      
+//      val sc = filteredVds.sparkContext
+//      val yOptBc = sc.broadcast(yOpt)
+//      val covBc = sc.broadcast(cov)
+//      
+//      val restStatsRDD = filteredVds.map { case (v, (va, gs) => 
+//        val yOpt = yOptBc.value
+//        val cov = covBc.value
+//        
+//      }
+//      
+//      var restStats =
+//        if (req.limit.isEmpty)
+//          restStatsRDD.collect() // avoids first pass of take, modify if stats exceed memory
+//        else {
+//          val limit = req.limit.get
+//          if (limit < 0)
+//            throw new RestFailure(s"limit must be non-negative: got $limit")
+//          restStatsRDD.take(limit)
+//        }
+//
+//      if (restStats.size > hardLimit)
+//        restStats = restStats.take(hardLimit)
+//      }
+    
+      GetScoreCovarianceResult(is_error = false, None, req.passback,
+        Some(activeVariants),
+        scoresOpt,
+        Some(covariance),
+        sigmaSqOpt,
+        Some(cov.rows),
+        Some(activeVariants.length))
     }
   }
 
@@ -310,14 +278,14 @@ class RestServiceLinreg(vds: VariantDataset, covariates: Array[String], useDosag
 
         var passback: Option[String] = None
         try {
-          val getStatsReq = read[GetLinregRequest](text)
+          val getStatsReq = read[GetScoreCovarianceRequest](text)
           passback = getStatsReq.passback
           val result = getStats(getStatsReq)
           Ok(write(result))
             .putHeaders(`Content-Type`(`application/json`))
         } catch {
           case e: Exception =>
-            val result = GetLinregResult(is_error = true, Some(e.getMessage), passback, None, None, None)
+            val result = GetScoreCovarianceResult(is_error = true, Some(e.getMessage), passback, None, None, None, None, None, None)
             BadRequest(write(result))
               .putHeaders(`Content-Type`(`application/json`))
         }
