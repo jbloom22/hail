@@ -15,23 +15,17 @@ import is.hail.annotations.Annotation
 object Skat {
 
   def seqOp(t1: (Double, ArrayBuilder[SparseVector[Double]], ArrayBuilder[DenseVector[Double]]),
-    t2: (Double, SparseVector[Double], DenseVector[Double])):
+            t2: (Double, SparseVector[Double], DenseVector[Double])):
   (Double, ArrayBuilder[SparseVector[Double]], ArrayBuilder[DenseVector[Double]]) = {
     (t1, t2) match {
       case ((sum, genotypesAB, qgAB), (skatStat, g, qg)) =>
-        (skatStat + sum, {
-          genotypesAB += g;
-          genotypesAB
-        }, {
-          qgAB += qg;
-          qgAB
-        })
+        (skatStat + sum, {genotypesAB += g;genotypesAB}, {qgAB += qg;qgAB})
       case _ => fatal("SeqOp function passed in invalid parameters")
     }
   }
 
   def combOp(t1: (Double, ArrayBuilder[SparseVector[Double]], ArrayBuilder[DenseVector[Double]]),
-    t2: (Double, ArrayBuilder[SparseVector[Double]], ArrayBuilder[DenseVector[Double]])):
+             t2: (Double, ArrayBuilder[SparseVector[Double]], ArrayBuilder[DenseVector[Double]])):
   (Double, ArrayBuilder[SparseVector[Double]], ArrayBuilder[DenseVector[Double]]) = {
     (t1, t2) match {
       case ((sum1, genotypesAB1, qgAB1), (sum2, genotypesAB2, qgAB2)) =>
@@ -85,6 +79,7 @@ object Skat {
     val filteredVds = vds.filterSamplesList(completeSamples.toSet)
 
     val (keysType, keysQuerier) = filteredVds.queryVA(variantKeys)
+
     //TODO: make this work for numerical data rather than just doubles
     val weightQuerier = filteredVds.queryVA(weightExpr) match {
       case (TDouble, q) => q.asInstanceOf[Annotation => Double]
@@ -95,7 +90,6 @@ object Skat {
     def square = (x: Double) => x * x
 
     val sc = filteredVds.sparkContext
-    val QBc = sc.broadcast()
     val residualBc = sc.broadcast(residual)
 
     val (keyType, keyedRdd) =
