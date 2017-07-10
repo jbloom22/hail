@@ -1,51 +1,66 @@
 package is.hail.methods
 
-import is.hail.stats.SkatPerGene
-import breeze.linalg.qr.QR
-import breeze.linalg.{DenseMatrix, DenseVector, SparseVector, VectorBuilder, qr}
+import is.hail.utils.{ArrayBuilder, _}
+import is.hail.variant._
 import is.hail.expr.{TArray, TDouble, TSet, TStruct}
 import is.hail.keytable.KeyTable
 import is.hail.stats.RegressionUtils
-import is.hail.utils.{ArrayBuilder, fatal, plural}
-import is.hail.variant._
-import scala.math.sqrt
-import org.apache.spark.sql.Row
 import is.hail.annotations.Annotation
+import is.hail.stats.SkatModel
+import breeze.linalg.{SparseVector, _}
+import org.apache.spark.sql.Row
+
+case class SkatStat(q: Double, pval: Double)
+
+case class SkatTuple(q: Double, xw: SparseVector[Double], qtxw: DenseVector[Double])
+
+object SkatAgg {
+  val zeroVal = SkatAgg(0.0, new ArrayBuilder[SparseVector[Double]](), new ArrayBuilder[DenseVector[Double]]())
+
+  def seqOp(sa: SkatAgg, st: SkatTuple): SkatAgg = SkatAgg(sa.q + st.q, sa.xws + st.xw, sa.qtxws + st.qtxw)
+
+  def combOp(sa: SkatAgg, sa2: SkatAgg): SkatAgg =
+    SkatAgg(sa.q + sa2.q, sa.xws ++ sa2.xws.result(), sa.qtxws ++ sa2.qtxws.result())
+  
+  def resultOp(sa: SkatAgg): SkatStat = ???
+}
+
+//    def resultOP(p: (Double, ArrayBuilder[SparseVector[Double]],
+//      ArrayBuilder[DenseVector[Double]])): (Double, Double) = {
+//      p match {
+//        case (unscaledSkatStat, genotypeAB, qgAB) => {
+//          val m = genotypeAB.size
+//          val gw = DenseMatrix.zeros[Double](n, m)
+//
+//          //copy in non-zeros
+//          for (i <- 0 until m) {
+//            val nnz = genotypeAB.apply(i).used
+//            for (j <- 0 until nnz) {
+//              val index = genotypeAB.apply(i).index(j)
+//              gw(i, index) = genotypeAB.apply(i).data(index)
+//            }
+//          }
+//
+//          //make Qg non-zeros array initialized with all 0's
+//          val k = qgAB.apply(0).length
+//          val qtgw = DenseMatrix.zeros[Double](m, k)
+//
+//          //copy in non-zeros
+//          for (i <- 0 until m) {
+//            for (j <- 0 until k) {
+//              qtgw(i, j) = qgAB.apply(i)(j)
+//            }
+//          }
+//
+//          val SPG = new SkatPerGene(gw, qtgw, unscaledSkatStat / (2 * sigmaSq))
+//          SPG.computeSkatStats()
+//        }
+
+
+
+case class SkatAgg(q: Double, xws: ArrayBuilder[SparseVector[Double]], qtxws: ArrayBuilder[DenseVector[Double]])
 
 object Skat {
-
-  def seqOp(t1: (Double, ArrayBuilder[SparseVector[Double]], ArrayBuilder[DenseVector[Double]]),
-            t2: (Double, SparseVector[Double], DenseVector[Double])):
-  (Double, ArrayBuilder[SparseVector[Double]], ArrayBuilder[DenseVector[Double]]) = {
-    (t1, t2) match {
-      case ((sum, genotypesAB, qgAB), (skatStat, g, qg)) =>
-        (skatStat + sum, {genotypesAB += g;genotypesAB}, {qgAB += qg;qgAB})
-      case _ => fatal("SeqOp function passed in invalid parameters")
-    }
-  }
-
-  def combOp(t1: (Double, ArrayBuilder[SparseVector[Double]], ArrayBuilder[DenseVector[Double]]),
-             t2: (Double, ArrayBuilder[SparseVector[Double]], ArrayBuilder[DenseVector[Double]])):
-  (Double, ArrayBuilder[SparseVector[Double]], ArrayBuilder[DenseVector[Double]]) = {
-    (t1, t2) match {
-      case ((sum1, genotypesAB1, qgAB1), (sum2, genotypesAB2, qgAB2)) =>
-        (sum1 + sum2, {
-          for (i <- 1 to genotypesAB2.size) {
-            genotypesAB1 += genotypesAB2.apply(i)
-          }
-          genotypesAB1
-        }, {
-          for (i <- 1 to qgAB2.size) {
-            qgAB1 += qgAB2.apply(i)
-          }
-          qgAB1
-        }
-        )
-      case _ => fatal("CombOp function passed in invalid parameters")
-    }
-  }
-
-
   def apply(vds: VariantDataset,
     keyName: String,
     variantKeys: String,
@@ -56,7 +71,7 @@ object Skat {
 
     //get variables
     val (y, cov, completeSamples) = RegressionUtils.getPhenoCovCompleteSamples(vds, yExpr, covExpr)
-    println(completeSamples)
+
     val n = y.size
     val k = cov.cols
     val d = n - k - 1
@@ -65,44 +80,35 @@ object Skat {
       fatal(s"$n samples and $k ${ plural(k, "covariate") } including intercept implies $d degrees of freedom.")
 
     // fit null model
-
-    //expand Covariates to include intercept
-    val QR(q, r) = qr.reduced.impl_reduced_DM_Double(cov)
+    val qr.QR(q, r) = qr.reduced.impl_reduced_DM_Double(cov)
     val beta = r \ (q.t * y)
+    val res = y - cov * beta
+    val sigmaSq = (res dot res) / d
 
-    val residual = y - cov * beta
-    val sigmaSq = (residual dot residual) / d
-
-    // prepare variables to broadcast
-
-    // aggregateByKey
     val filteredVds = vds.filterSamplesList(completeSamples.toSet)
 
     val (keysType, keysQuerier) = filteredVds.queryVA(variantKeys)
+    val (weightType, weightQuerier) = filteredVds.queryVA(weightExpr)
 
-    //TODO: make this work for numerical data rather than just doubles
-    val weightQuerier = filteredVds.queryVA(weightExpr) match {
-      case (TDouble, q) => q.asInstanceOf[Annotation => Double]
-      case (t, _) => fatal("Weights must be Doubles")
+    // FIXME extend to other types
+    weightType match {
+      case TDouble => weightQuerier.asInstanceOf[Annotation => Double]
+      case _ => fatal("Weights must be Doubles")
     }
-    //check that weightType is numeric
-
-    def square = (x: Double) => x * x
-
+    
     val sc = filteredVds.sparkContext
-    val residualBc = sc.broadcast(residual)
+    val resBc = sc.broadcast(res)
 
     val (keyType, keyedRdd) =
       if (singleKey) {
         (keysType, filteredVds.rdd.flatMap { case (v, (va, gs)) =>
-          val w = Option(weightQuerier(va))
-          //TODO: add in option to compute HardCalls or dosages
-          val keys = if (w.isEmpty) None else Option(keysQuerier(va))
-          val x = RegressionUtils.hardCalls(gs, n) * sqrt(w.get)
-          val wSjSqd = if (keys.isEmpty) 0.0 else {
-            square(residualBc.value dot x)
+          (Option(keysQuerier(va)), Option(weightQuerier(va))) match {
+            case (Some(key), Some(w)) =>
+              val wx = math.sqrt(w.asInstanceOf[Double]) * RegressionUtils.hardCalls(gs, n)
+              val wSj = resBc.value dot wx 
+              Some((key, SkatTuple(wSj * wSj, wx, q.t * wx)))
+            case _ => None
           }
-          keys.map((_, (wSjSqd, x, q.t * x)))
         })
       } else {
         val keyType = keysType match {
@@ -111,67 +117,27 @@ object Skat {
           case _ => fatal(s"With single_key=False, variant keys must be of type Set[T] or Array[T], got $keysType")
         }
         (keyType, filteredVds.rdd.flatMap { case (v, (va, gs)) =>
-          val w = Option(weightQuerier(va))
-          val keys = if (w.isEmpty) Iterable.empty
-          else {
-            Option(keysQuerier(va).asInstanceOf[Iterable[_]]).getOrElse(Iterable.empty)
-          }
-          if (keys.isEmpty)
+          val keys = Option(keysQuerier(va).asInstanceOf[Iterable[_]]).getOrElse(Iterable.empty)
+          val optWeight = Option(weightQuerier(va))
+          if (keys.isEmpty || optWeight.isEmpty)
             Iterable.empty
           else {
-            val x = RegressionUtils.hardCalls(gs, n) * sqrt(w.get)
-            val wSjSqd = if (keys.isEmpty) 0.0 else {
-              square(residualBc.value dot x)
-            }
-            keys.map((_, (wSjSqd, x, q.t * x)))
+            val w = optWeight.get.asInstanceOf[Double]
+            val wx = math.sqrt(w) * RegressionUtils.hardCalls(gs, n)
+            val wSj = resBc.value dot wx
+            keys.map((_, SkatTuple(wSj * wSj, wx, q.t * wx)))
           }
         })
       }
+      
+    val aggregatedKT = keyedRdd.aggregateByKey(SkatAgg.zeroVal)(SkatAgg.seqOp, SkatAgg.combOp)
 
-    def resultOP(p: (Double, ArrayBuilder[SparseVector[Double]],
-      ArrayBuilder[DenseVector[Double]])): (Double, Double) = {
-      p match {
-        case (unscaledSkatStat, genotypeAB, qgAB) => {
-          val m = genotypeAB.size
-          val gw = DenseMatrix.zeros[Double](n, m)
-
-          //copy in non-zeros
-          for (i <- 0 until m) {
-            val nnz = genotypeAB.apply(i).used
-            for (j <- 0 until nnz) {
-              val index = genotypeAB.apply(i).index(j)
-              gw(i, index) = genotypeAB.apply(i).data(index)
-            }
-          }
-
-          //make Qg non-zeros array initialized with all 0's
-          val k = qgAB.apply(0).length
-          val qtgw = DenseMatrix.zeros[Double](m, k)
-
-          //copy in non-zeros
-          for (i <- 0 until m) {
-            for (j <- 0 until k) {
-              qtgw(i, j) = qgAB.apply(i)(j)
-            }
-          }
-
-          val SPG = new SkatPerGene(gw, qtgw, unscaledSkatStat / (2 * sigmaSq))
-          SPG.computeSkatStats()
-        }
-
-      }
-
-
-    }
-
-    val zeroVal = (0.0, new ArrayBuilder[SparseVector[Double]](), new ArrayBuilder[DenseVector[Double]]())
-    val aggregatedKT = keyedRdd.aggregateByKey(zeroVal)(seqOp, combOp)
     val skatRDD = aggregatedKT.map { case (key, value) =>
-        val (skatStat, pValue) = resultOP(value)
-        Row(key, skatStat, pValue)
+        val (qstat, pval) = SkatAgg.resultOp(value)
+        Row(key, qstat, pval)
       }
-    val (skatSignature, _) = TStruct(keyName -> keyType).merge(TStruct(("skatStat",TDouble),("pValue",TDouble)))
+    val (skatSignature, _) = TStruct(keyName -> keyType).merge(TStruct(("Qstat",TDouble),("pval",TDouble)))
 
-   new KeyTable(filteredVds.hc,skatRDD,skatSignature,key = Array(keyName))
+   new KeyTable(filteredVds.hc, skatRDD, skatSignature, key = Array(keyName))
   }
 }

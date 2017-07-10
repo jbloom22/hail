@@ -1,5 +1,3 @@
-//Charlie Colley
-//  29/6/2017
 package is.hail.stats
 
 import breeze.linalg._
@@ -7,6 +5,65 @@ import breeze.numerics._
 import com.sun.jna.Native
 import com.sun.jna.ptr.IntByReference
 import is.hail.utils._
+
+class SkatModel(weightedG: DenseMatrix[Double],QtG: DenseMatrix[Double], skatStat: Double) {
+
+  /** Davies Algorithm original C code
+    *   Citation:
+    *     Davies, Robert B. "The distribution of a linear combination of
+    *     x2 random variables." Applied Statistics 29.3 (1980): 323-333.
+    *   Software Link:
+    *     http://www.robertnz.net/QF.htm
+    */
+  @native
+  def qf(lb1: Array[Double], nc1: Array[Double], n1: Array[Int], r1: Int,
+    sigma: Double, c1: Double, lim1: Int, acc: Double, trace: Array[Double],
+    ifault: IntByReference): Double
+
+  Native.register("ibs")
+
+  def computeSkatStats(): (Double, Double) = {
+
+    //Compute coefficients of chi-squared distribution
+    val variantGrammian = 0.5 * (weightedG.t * weightedG - QtG.t * QtG)
+    val allEvals = eigSymD.justEigenvalues(variantGrammian).toArray
+    
+    //compute threshold for eigenvalues
+    var allEvalsSum = 0.0
+    var i = 0
+    while(i < allEvals.length){
+      allEvalsSum += allEvals(i)
+      i += 1
+    }
+    val threshold = 1e-5 * allEvalsSum / allEvals.length
+
+    //Initialize parameters to Davies' algorithm
+    val evals = allEvals.filter(_ > threshold)
+    val terms = evals.length
+    val noncentrality = Array.fill[Double](terms)(0.0)
+    val dof = Array.fill[Int](terms)(1)
+    val trace = Array.fill[Double](7)(0.0)
+    val fault = new IntByReference()
+    val s = 0.0
+    val accuracy = 1e-6
+    val iterations = 10000
+    val x = qf(evals, noncentrality, dof, terms, s, skatStat,
+      iterations, accuracy, trace, fault)
+
+
+    fault.getValue match {
+      case 0 => (skatStat, 1 - x)
+      case 1 => fatal(f"required accuracy of $accuracy NOT achieved")
+      case 2 => fatal("round-off error possibly significant")
+      case 3 => fatal("invalid parameters")
+      case 4 => fatal("unable to locate integration parameter")
+      case 5 => fatal("out of memory")
+    }
+  }
+}
+
+
+
 
 /** SKAT
   *   an implementation of the SKAT algorithm.
@@ -30,7 +87,7 @@ import is.hail.utils._
   */
 
 
-class SkatModel(G: DenseMatrix[Double], covs: DenseMatrix[Double],
+class SkatModelTemp(G: DenseMatrix[Double], covs: DenseMatrix[Double],
            phenotypes: DenseVector[Double], weights: DenseVector[Double]) {
   //initialize basic counters
   val n = covs.rows
@@ -144,56 +201,4 @@ class SkatNullModel(Q: DenseMatrix[Double],weightedG: DenseMatrix[Double],
 
   }
 }
-
-class SkatPerGene(weightedG: DenseMatrix[Double],QtG: DenseMatrix[Double], skatStat: Double) {
-
-  /** Davies Algorithm original C code
-    *   Citation:
-    *     Davies, Robert B. "The distribution of a linear combination of
-    *     x2 random variables." Applied Statistics 29.3 (1980): 323-333.
-    *   Software Link:
-    *     http://www.robertnz.net/QF.htm
-    */
-  @native
-  def qf(lb1: Array[Double], nc1: Array[Double], n1: Array[Int], r1: Int,
-    sigma: Double, c1: Double, lim1: Int, acc: Double, trace: Array[Double],
-    ifault: IntByReference): Double
-
-  Native.register("ibs")
-
-  def computeSkatStats(): (Double, Double) = {
-
-    //Compute coefficients of chi-squared distribution
-    val GramMatrix =
-      (weightedG.t * weightedG - QtG.t * QtG) * .5
-    var lambdas = eigSymD.justEigenvalues(GramMatrix).toArray
-    val threshold = lambdas.sum / (lambdas.length * 1e5)
-    lambdas = lambdas.filter(_ > threshold)
-
-    //Initialize parameters to Davies' algorithm
-    val terms = lambdas.length
-    val noncentrality = Array.fill[Double](terms)(0.0)
-    val degreesOfFreedom = Array.fill[Int](terms)(1)
-    val trace = Array.fill[Double](7)(0.0)
-    val fault = new IntByReference()
-    val s = 0.0
-    val accuracy = 1e-6
-    val iterations = 10000
-    val x = qf(lambdas, noncentrality, degreesOfFreedom, terms, s, skatStat,
-      iterations, accuracy, trace, fault)
-
-
-    fault.getValue match {
-      case 0 => (skatStat, 1 - x)
-      case 1 => fatal(f"required accuracy of $accuracy NOT achieved")
-      case 2 => fatal("round-off error possibly significant")
-      case 3 => fatal("invalid parameters")
-      case 4 => fatal("unable to locate integration parameter")
-      case 5 => fatal("out of memory")
-    }
-  }
-}
-
-
-
 

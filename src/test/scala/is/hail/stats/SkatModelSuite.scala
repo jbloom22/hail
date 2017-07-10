@@ -13,7 +13,7 @@ import java.io.File
 
 import breeze.numerics._
 import com.google.common.primitives.Doubles
-import is.hail.stats.SkatModel
+import is.hail.stats.SkatModelTemp
 import org.scalatest.testng.TestNGSuite
 
 class SkatModelSuite extends SparkSuite {
@@ -106,7 +106,7 @@ class SkatModelSuite extends SparkSuite {
     println("Starting Scala Routines")
     println(header)
 
-    val SKAT = new SkatModel(convert(G, Double), covariates, phenotypes, weights)
+    val SKAT = new SkatModelTemp(convert(G, Double), covariates, phenotypes, weights)
     val (skatNullModel,firstTiming1) = time{SKAT.fitCovariates()}
     var t1 = 0.0.toLong
     for (i <- 1 to testsToAverageOver) {
@@ -198,7 +198,7 @@ class SkatModelSuite extends SparkSuite {
     println(header)
     println("Starting scala routines")
     println(header)
-    val SKAT = new SkatModel(convert(genotypes, Double), covariates,
+    val SKAT = new SkatModelTemp(convert(genotypes, Double), covariates,
                         phenotypes, weights)
     val (skatNullModel,firstTiming1) = time{SKAT.fitCovariates()}
     var t1 = 0.0.toLong
