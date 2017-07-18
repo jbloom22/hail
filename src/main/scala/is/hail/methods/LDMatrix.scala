@@ -10,6 +10,7 @@ import org.apache.spark.mllib.linalg.distributed.{BlockMatrix, IndexedRow, Index
 import org.apache.spark.mllib.linalg.{DenseMatrix, DenseVector, Matrix, Vectors}
 import org.json4s._
 
+
 object LDMatrix {
   /**
     * Computes the LD matrix for the given VDS.
