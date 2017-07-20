@@ -1,25 +1,16 @@
 package is.hail.rest
 
-import breeze.linalg.{DenseMatrix, DenseVector, Vector, qr, sum}
+import breeze.linalg._
 import is.hail.stats.{LinearRegressionModel, RegressionUtils}
 import is.hail.variant._
 import is.hail.utils._
 import is.hail.variant.VariantDataset
 import org.apache.spark.rdd.RDD
-import org.http4s.headers.`Content-Type`
-import org.http4s._
-import org.http4s.MediaType._
-import org.http4s.dsl._
-import org.http4s.server._
-
-import scala.concurrent.ExecutionContext
-import org.json4s._
-import org.json4s.jackson.Serialization
-import org.json4s.jackson.Serialization.{read, write}
+import org.json4s.jackson.Serialization.read
 
 import scala.collection.mutable
 
-case class GetLinregRequest(passback: Option[String],
+case class GetRequestLinreg(passback: Option[String],
   md_version: Option[String],
   api_version: Int,
   phenotype: Option[String],
@@ -27,20 +18,21 @@ case class GetLinregRequest(passback: Option[String],
   variant_filters: Option[Array[VariantFilter]],
   limit: Option[Int],
   count: Option[Boolean],
-  sort_by: Option[Array[String]])
+  sort_by: Option[Array[String]]) extends GetRequest {
+}
+
+case class GetResultLinreg(is_error: Boolean,
+  error_message: Option[String],
+  passback: Option[String],
+  stats: Option[Array[LinregStat]],
+  nsamples: Option[Int],
+  count: Option[Int]) extends GetResult
 
 case class LinregStat(chrom: String,
   pos: Int,
   ref: String,
   alt: String,
   `p-value`: Option[Double])
-
-case class GetLinregResult(is_error: Boolean,
-  error_message: Option[String],
-  passback: Option[String],
-  stats: Option[Array[LinregStat]],
-  nsamples: Option[Int],
-  count: Option[Int])
 
 object RestServiceLinreg {
   def linreg(vds: VariantDataset, y: DenseVector[Double], cov: DenseMatrix[Double],
@@ -55,13 +47,8 @@ object RestServiceLinreg {
     
     if (d < 1)
       fatal(s"$n samples and $k ${ plural(k, "covariate") } including intercept implies $d degrees of freedom.")
-    
-    val lowerMinAC = 1 max minMAC
-    val lowerMaxAC = n min maxMAC
-    val upperMinAC = 2 * n - lowerMaxAC
-    val upperMaxAC = 2 * n - lowerMinAC
-    
-    def inRange(ac: Double): Boolean = (ac >= lowerMinAC && ac <= lowerMaxAC) || (ac >= upperMinAC && ac <= upperMaxAC)
+       
+    val inRange = RestService.inRangeFunc(n, minMAC, maxMAC)
     
     info(s"Running linear regression on $n samples with $k ${ plural(k, "covariate") } including intercept...")
 
@@ -75,7 +62,7 @@ object RestServiceLinreg {
     val QtyBc = sc.broadcast(Qty)
     val yypBc = sc.broadcast((y dot y) - (Qty dot Qty))
 
-    vds.rdd.map { case (v, (va, gs)) =>
+    vds.rdd.map { case (v, (_, gs)) =>
       val (x: Vector[Double], ac) =
         if (!useDosages) // replace by hardCalls in 0.2, with ac post-imputation
           RegressionUtils.hardCallsWithAC(gs, n, sampleMaskBc.value)
@@ -100,7 +87,7 @@ object RestServiceLinreg {
   }
 }
 
-class RestServiceLinreg(vds: VariantDataset, covariates: Array[String], useDosages: Boolean, maxWidth: Int, hardLimit: Int) { 
+class RestServiceLinreg(vds: VariantDataset, covariates: Array[String], useDosages: Boolean, maxWidth: Int, hardLimit: Int) extends RestService { 
   private val nSamples: Int = vds.nSamples
   private val sampleMask: Array[Boolean] = Array.ofDim[Boolean](nSamples)
   private val availableCovariates: Set[String] = covariates.toSet
@@ -108,7 +95,12 @@ class RestServiceLinreg(vds: VariantDataset, covariates: Array[String], useDosag
   private val (sampleIndexToPresentness: Array[Array[Boolean]], 
                  covariateIndexToValues: Array[Array[Double]]) = RegressionUtils.getSampleAndCovMaps(vds, covariates)
   
-  def getStats(req: GetLinregRequest): GetLinregResult = {
+  def readText(text: String): GetRequestLinreg = read[GetRequestLinreg](text)
+
+  def getError(message: String, passback: Option[String]) = GetResultLinreg(is_error = true, Some(message), passback, None, None, None)
+  
+  def getStats(req0: GetRequest): GetResultLinreg = {
+    val req = req0.asInstanceOf[GetRequestLinreg]
     req.md_version.foreach { md_version =>
       if (md_version != "mdv1")
         throw new RestFailure(s"Unknown md_version `$md_version'. Available md_versions: mdv1")
@@ -235,7 +227,7 @@ class RestServiceLinreg(vds: VariantDataset, covariates: Array[String], useDosag
     
     val window = Interval(Locus(chrom, minPos), Locus(chrom, maxPos + 1))
     
-    info(s"Using window ${RestServer.windowToString(window)} of size ${width + 1}")
+    info(s"Using window ${RestService.windowToString(window)} of size ${width + 1}")
 
     // filter and compute
     val windowedVds = vds.filterIntervals(IntervalTree(Array(window)), keep = true)
@@ -243,10 +235,10 @@ class RestServiceLinreg(vds: VariantDataset, covariates: Array[String], useDosag
     if (req.count.getOrElse(false)) {
       val count = windowedVds.countVariants().toInt
       
-      GetLinregResult(is_error = false, None, req.passback, None, None, Some(count))
+      GetResultLinreg(is_error = false, None, req.passback, None, None, Some(count))
     }
     else {
-      val (Some(y), cov) = RestServer.getYCovAndSetMask(sampleMask, vds, window, Some(yName), covNames, covVariants,
+      val (Some(y), cov) = RestService.getYCovAndSetMask(sampleMask, vds, window, Some(yName), covNames, covVariants,
         useDosages, availableCovariates, availableCovariateToIndex, sampleIndexToPresentness, covariateIndexToValues)    
 
       val restStatsRDD = RestServiceLinreg.linreg(windowedVds, y, cov, sampleMask, useDosages, minMAC, maxMAC)
@@ -261,7 +253,7 @@ class RestServiceLinreg(vds: VariantDataset, covariates: Array[String], useDosag
           restStatsRDD.take(limit)
         }
 
-      if (restStats.size > hardLimit)
+      if (restStats.length > hardLimit)
         restStats = restStats.take(hardLimit)
 
       req.sort_by.foreach { sortFields => 
@@ -288,39 +280,7 @@ class RestServiceLinreg(vds: VariantDataset, covariates: Array[String], useDosag
           }
         }
       }
-      GetLinregResult(is_error = false, None, req.passback, Some(restStats), Some(y.size), Some(restStats.size))
+      GetResultLinreg(is_error = false, None, req.passback, Some(restStats), Some(y.size), Some(restStats.length))
     }
-  }
-
-  def service(implicit executionContext: ExecutionContext = ExecutionContext.global): HttpService = Router(
-    "" -> rootService)
-
-  def rootService(implicit executionContext: ExecutionContext) = HttpService {
-    case _ -> Root =>
-      // The default route result is NotFound. Sometimes MethodNotAllowed is more appropriate.
-      MethodNotAllowed()
-
-    case req@POST -> Root / "getStats" =>
-      println("in getStats")
-
-      req.decode[String] { text =>
-        info("request: " + text)
-
-        implicit val formats = Serialization.formats(NoTypeHints)
-
-        var passback: Option[String] = None
-        try {
-          val getStatsReq = read[GetLinregRequest](text)
-          passback = getStatsReq.passback
-          val result = getStats(getStatsReq)
-          Ok(write(result))
-            .putHeaders(`Content-Type`(`application/json`))
-        } catch {
-          case e: Exception =>
-            val result = GetLinregResult(is_error = true, Some(e.getMessage), passback, None, None, None)
-            BadRequest(write(result))
-              .putHeaders(`Content-Type`(`application/json`))
-        }
-      }
   }
 }
