@@ -1,5 +1,6 @@
 package is.hail.rest
 
+import breeze.linalg.{norm, qr, sum}
 import breeze.stats.variance
 import is.hail.stats.RegressionUtils
 import is.hail.variant._
@@ -204,38 +205,48 @@ class RestServiceScoreCovariance(vds: VariantDataset, covariates: Array[String],
     else {
       val (yOpt, cov) = RestService.getYCovAndSetMask(sampleMask, vds, window, yNameOpt, covNames, covVariants,
         useDosages, availableCovariates, availableCovariateToIndex, sampleIndexToPresentness, covariateIndexToValues)
-      
-      val (x, activeVariants) = ToFilteredCenteredIndexedRowMatrix(filteredVds, minMAC, maxMAC)
-      val nActiveVariants = activeVariants.length
+            
+      val (x, activeVariants) = ToFilteredCenteredIndexedRowMatrix(filteredVds, cov.rows, sampleMask, minMAC, maxMAC)
       
       val limit = req.limit.getOrElse(hardLimit)
-      if (nActiveVariants > limit)
+      if (activeVariants.length > limit)
         throw new RestFailure(s"Number of active variants $activeVariants exceeds limit $limit")
       
-      val Xb = x.toBlockMatrix()
-      val covariance = Xb.multiply(Xb.transpose).toLocalMatrix().toArray
+      val covariance =
+        if (req.compute_cov.isEmpty || (req.compute_cov.isDefined && req.compute_cov.get)) {
+          val Xb = x.toBlockMatrix()
+          Some(Xb.multiply(Xb.transpose).toLocalMatrix().toArray)
+        } else
+          None
 
       val scoresOpt = yOpt.map { y =>
-        val yMat = new org.apache.spark.mllib.linalg.DenseMatrix(1, y.length, y.toArray, true)
+        val yMat = new org.apache.spark.mllib.linalg.DenseMatrix(y.length, 1, y.toArray, true)
         x.multiply(yMat).toBlockMatrix().toLocalMatrix().toArray
       }
 
-      val sigmaSqOpt: Option[Double] = yOpt.map(variance(_))
+      val sigmaSqOpt: Option[Double] = yOpt.map { y =>
+        val d = cov.rows - cov.cols - 1
+        val qrd = qr.reduced(cov)
+        val beta = qrd.r \ (qrd.q.t * y)
+        val res = y - cov * beta     
+        
+        (res dot res) / d
+      }
 
       GetResultScoreCovariance(is_error = false, None, req.passback,
         Some(activeVariants),
         scoresOpt,
-        Some(covariance),
+        covariance,
         sigmaSqOpt,
         Some(cov.rows),
-        Some(nActiveVariants))
+        Some(activeVariants.length))
     }
   }
 }
 
+// n is nCompleteSamples
 object ToFilteredCenteredIndexedRowMatrix {  
-  def apply(vds: VariantDataset, minMAC: Int, maxMAC: Int): (IndexedRowMatrix, Array[SingleVariant]) = {
-    val n = vds.nSamples
+  def apply(vds: VariantDataset, n: Int, mask: Array[Boolean], minMAC: Int, maxMAC: Int): (IndexedRowMatrix, Array[SingleVariant]) = {
     val inRange = RestService.inRangeFunc(n, minMAC, maxMAC)
 
     require(vds.wasSplit)
@@ -243,9 +254,10 @@ object ToFilteredCenteredIndexedRowMatrix {
     val variantIdxBc = vds.sparkContext.broadcast(variants.index)
 
     val indexedRows = vds.rdd.flatMap { case (v, (_, gs)) =>  // FIXME: consider behavior when all missing
-      val (x, ac) = RegressionUtils.hardCallsWithAC(gs, n)
+      val (x, ac) = RegressionUtils.hardCallsWithAC(gs, n, mask)
+      val mu = sum(x) / n // FIXME: inefficient
       if (inRange(ac))
-        Some(IndexedRow(variantIdxBc.value(v), Vectors.dense((x - ac).toArray)))
+        Some(IndexedRow(variantIdxBc.value(v), Vectors.dense((x - mu).toArray)))
       else
         None
     }
@@ -255,7 +267,7 @@ object ToFilteredCenteredIndexedRowMatrix {
     val activeVariants = irm.rows.map(ir => ir.index.toInt).collect().sorted
       .map { i =>
         val v = variants(i)
-        SingleVariant(Some(v.contig), Some(v.start), Some(v.ref), Some(v.alt)) // FIXME error handling?
+        SingleVariant(Some(v.contig), Some(v.start), Some(v.ref), Some(v.alt)) // FIXME: error handling
       }
     
     (irm, activeVariants)
