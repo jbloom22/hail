@@ -1,7 +1,6 @@
 package is.hail.rest
 
-import breeze.linalg.{norm, qr, sum}
-import breeze.stats.variance
+import breeze.linalg._
 import is.hail.stats.RegressionUtils
 import is.hail.variant._
 import is.hail.utils._
@@ -199,77 +198,106 @@ class RestServiceScoreCovariance(vds: VariantDataset, covariates: Array[String],
         vds.filterVariantsList(variantsSet.toSet, keep = true)
 
     if (req.count.getOrElse(false)) {
-      val count = filteredVds.countVariants().toInt // FIXME: this does not account for MAC
+      val count = filteredVds.countVariants().toInt // upper bound as does not account for MAC filtering
       GetResultScoreCovariance(is_error = false, None, req.passback, None, None, None, None, None, Some(count))
     }
     else {
       val (yOpt, cov) = RestService.getYCovAndSetMask(sampleMask, vds, window, yNameOpt, covNames, covVariants,
         useDosages, availableCovariates, availableCovariateToIndex, sampleIndexToPresentness, covariateIndexToValues)
-            
-      val (x, activeVariants) = ToFilteredCenteredIndexedRowMatrix(filteredVds, cov.rows, sampleMask, minMAC, maxMAC)
-      
-      val limit = req.limit.getOrElse(hardLimit)
-      if (activeVariants.length > limit)
-        throw new RestFailure(s"Number of active variants $activeVariants exceeds limit $limit")
-      
-      val covariance =
-        if (req.compute_cov.isEmpty || (req.compute_cov.isDefined && req.compute_cov.get)) {
-          val Xb = x.toBlockMatrix()
-          Some(Xb.multiply(Xb.transpose).toLocalMatrix().toArray)
+
+      val (yResOpt, sigmaSqOpt) =
+        if (yOpt.isDefined) {
+          val y = yOpt.get
+          val d = cov.rows - cov.cols
+          if (d < 1)
+            fatal(s"${cov.rows} samples and ${cov.cols} ${ plural(cov.cols, "covariate") } including intercept implies $d degrees of freedom.")
+          
+          val qrDecomp = qr.reduced(cov)
+          val beta = qrDecomp.r \ (qrDecomp.q.t * y)
+          val yRes = y - cov * beta
+          val sigmaSq = (yRes dot yRes) / d
+          
+          (Some(yRes), Some(sigmaSq))
         } else
-          None
+          (None, None)
 
-      val scoresOpt = yOpt.map { y =>
-        val yMat = new org.apache.spark.mllib.linalg.DenseMatrix(y.length, 1, y.toArray, true)
-        x.multiply(yMat).toBlockMatrix().toLocalMatrix().toArray
-      }
+      val (xOpt, activeVariants) = ToFilteredCenteredIndexedRowMatrix(filteredVds, cov.rows, sampleMask, minMAC, maxMAC)
 
-      val sigmaSqOpt: Option[Double] = yOpt.map { y =>
-        val d = cov.rows - cov.cols - 1
-        val qrd = qr.reduced(cov)
-        val beta = qrd.r \ (qrd.q.t * y)
-        val res = y - cov * beta     
+      val noActiveVariants = xOpt.isEmpty
+
+      val nCompleteSamples = cov.rows
+      
+      if (noActiveVariants) {
+        GetResultScoreCovariance(is_error = false, None, req.passback,
+          Some(Array.empty[SingleVariant]),
+          Some(Array.empty[Double]),
+          Some(Array.empty[Double]),
+          sigmaSqOpt,
+          Some(nCompleteSamples),
+          Some(0))
+      } else {
+        val limit = req.limit.getOrElse(hardLimit)
+        if (activeVariants.length > limit)
+          throw new RestFailure(s"Number of active variants $activeVariants exceeds limit $limit")
+
+        val X = xOpt.get
         
-        (res dot res) / d
-      }
+        val covarianceOpt =
+          if (req.compute_cov.isEmpty || (req.compute_cov.isDefined && req.compute_cov.get)) {
+            val Xb = X.toBlockMatrix()
+            val covarianceMatrix = Xb.multiply(Xb.transpose).toLocalMatrix()
+            val covariance = RestService.lowerTriangle(covarianceMatrix.toArray, activeVariants.length)
+            Some(covariance)
+          } else
+            None
+        
+        val scoresOpt = yResOpt.map { yRes =>
+          val yResMat = new org.apache.spark.mllib.linalg.DenseMatrix(yRes.length, 1, yRes.toArray, true)
+          X.multiply(yResMat).toBlockMatrix().toLocalMatrix().toArray
+        }
 
-      GetResultScoreCovariance(is_error = false, None, req.passback,
-        Some(activeVariants),
-        scoresOpt,
-        covariance,
-        sigmaSqOpt,
-        Some(cov.rows),
-        Some(activeVariants.length))
+        val activeSingleVariants = activeVariants.map(v =>
+          SingleVariant(Some(v.contig), Some(v.start), Some(v.ref), Some(v.alt)))
+        
+        GetResultScoreCovariance(is_error = false, None, req.passback,
+          Some(activeSingleVariants),
+          scoresOpt,
+          covarianceOpt,
+          sigmaSqOpt,
+          Some(nCompleteSamples),
+          Some(activeVariants.length))
+      }
     }
   }
 }
 
 // n is nCompleteSamples
 object ToFilteredCenteredIndexedRowMatrix {  
-  def apply(vds: VariantDataset, n: Int, mask: Array[Boolean], minMAC: Int, maxMAC: Int): (IndexedRowMatrix, Array[SingleVariant]) = {
+  def apply(vds: VariantDataset, n: Int, mask: Array[Boolean], minMAC: Int, maxMAC: Int): (Option[IndexedRowMatrix], Array[Variant]) = {
+    require(vds.wasSplit)
+    
     val inRange = RestService.inRangeFunc(n, minMAC, maxMAC)
 
-    require(vds.wasSplit)
-    val variants = vds.variants.collect()
-    val variantIdxBc = vds.sparkContext.broadcast(variants.index)
-
-    val indexedRows = vds.rdd.flatMap { case (v, (_, gs)) =>  // FIXME: consider behavior when all missing
+    val variantVectors = vds.rdd.flatMap { case (v, (_, gs)) =>  // when all missing, gets filtered by ac
       val (x, ac) = RegressionUtils.hardCallsWithAC(gs, n, mask)
-      val mu = sum(x) / n // FIXME: inefficient
-      if (inRange(ac))
-        Some(IndexedRow(variantIdxBc.value(v), Vectors.dense((x - mu).toArray)))
-      else
+      if (inRange(ac)) {
+        val mu = sum(x) / n // inefficient
+        Some(v, Vectors.dense((x - mu).toArray))
+      } else
         None
     }
 
-    val irm = new IndexedRowMatrix(indexedRows, variants.length, n)
-
-    val activeVariants = irm.rows.map(ir => ir.index.toInt).collect().sorted
-      .map { i =>
-        val v = variants(i)
-        SingleVariant(Some(v.contig), Some(v.start), Some(v.ref), Some(v.alt)) // FIXME: error handling
-      }
+    // order is preserved from original OrderedRDD
+    val activeVariants = variantVectors.map(_._1).collect()
     
-    (irm, activeVariants)
+    val irmOpt = 
+      if (!activeVariants.isEmpty) {
+        val reducedIndicesBc = vds.sparkContext.broadcast(activeVariants.index)    
+        val indexedRows = variantVectors.map { case (v, x) => IndexedRow(reducedIndicesBc.value(v), x) }
+        Some(new IndexedRowMatrix(indexedRows, nRows = activeVariants.length, nCols = n))
+      } else
+        None
+
+    (irmOpt, activeVariants)
   }
 }

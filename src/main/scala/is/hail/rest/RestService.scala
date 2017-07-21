@@ -135,6 +135,27 @@ object RestService {
 
     (yOpt, cov)
   }
+  
+  def lowerTriangle(a: Array[Double], n: Int): Array[Double] = {
+    val nTri = n * (n + 1) / 2
+    val b = Array.ofDim[Double](nTri)
+    var i = 0
+    var j = n
+    var k = 0
+    var l = 0
+    while (j > 0) {
+      k = n - j
+      while (k < n) {
+        b(l) = a(i + k)
+        k += 1
+        l += 1
+      }
+      i += n
+      j -= 1
+    }
+    
+    b
+  }
 }
 
 abstract class GetRequest {
@@ -159,7 +180,7 @@ abstract class RestService {
       MethodNotAllowed()
 
     case req@POST -> Root / "getStats" =>
-      println("in getStats")
+      // println("in getStats")
 
       req.decode[String] { text =>
         info("request: " + text)

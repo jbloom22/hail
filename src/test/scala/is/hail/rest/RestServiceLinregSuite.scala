@@ -52,7 +52,7 @@ class RestServiceLinregSuite extends SparkSuite {
     val t = new Thread(r)
     t.start()
 
-    Thread.sleep(8000) // Hack to give the server time to initialize
+    Thread.sleep(4000) // Hack to give the server time to initialize
     
     /*
     Sample code for generating p-values in R (below, missing genotypes are imputed using all samples; use subset when using BMI or HEIGHT):
