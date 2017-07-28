@@ -2189,9 +2189,9 @@ class VariantSampleMatrix[RPK, RK, T >: Null](val hc: HailContext, val metadata:
     rdd.unpersist()
   }
 
-  def naiveCoalesce(maxPartitions: Int): VariantSampleMatrix[T] =
+  def naiveCoalesce(maxPartitions: Int): VariantSampleMatrix[RPK, RK, T] =
     copy(rdd = rdd.naiveCoalesce(maxPartitions))
-
+  
   /**
     * @param filterExpr filter expression involving v (Variant), va (variant annotations), s (sample),
     * sa (sample annotations), and g (genotype annotation), which returns a boolean value

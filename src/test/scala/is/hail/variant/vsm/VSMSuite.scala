@@ -301,7 +301,7 @@ class VSMSuite extends SparkSuite {
 
   @Test def testNaiveCoalesce() {
     val g = for (
-      vsm <- VariantSampleMatrix.gen[Genotype](hc, VSMSubgen.random);
+      vsm <- VariantSampleMatrix.gen(hc, VSMSubgen.random);
       k <- Gen.choose(1, math.max(1, vsm.nPartitions)))
       yield (vsm, k)
 
