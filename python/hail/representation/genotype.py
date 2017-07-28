@@ -75,7 +75,10 @@ class Genotype(object):
 
     @classmethod
     def _from_java(cls, jrep):
+        if not Genotype._genotype_jobject:
+            Genotype._genotype_jobject = scala_object(Env.hail().variant, 'Genotype')
         jgenotype = Genotype._genotype_jobject
+
         g = Genotype.__new__(cls)
         g._init_from_java(jrep)
         g._jgenotype = jgenotype

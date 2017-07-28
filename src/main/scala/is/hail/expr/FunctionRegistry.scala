@@ -754,7 +754,7 @@ object FunctionRegistry {
   )
 
   registerMethodCode("fractionReadsRef", { (x: Code[Genotype]) => for (
-    (stad, ad) <- CM.memoize(x.invoke[Array[Int]]("unboxedAD"));
+    (stad, ad) <- CM.memoize(Code.invokeStatic[Genotype, Genotype, Array[Int]]("unboxedAD", x));
     (stsum, sum) <- CM.memoize(intArraySumCode(ad))
   ) yield Code(stad, stsum, sum.ceq(0).mux(Code._null, boxDouble(ad(0).toD / sum.toD)))
   }, "the ratio of ref reads to the sum of all *informative* reads.")
