@@ -454,9 +454,9 @@ class VariantDatasetFunctions(private val vds: VariantDataset) extends AnyVal {
     LinearRegressionBurden(vds, keyName, variantKeys, singleKey, aggExpr, y, covariates)
   }
 
-  def linreg(ys: Array[String], covariates: Array[String] = Array.empty[String], root: String = "va.linreg", useDosages: Boolean = false, variantBlockSize: Int = 16): VariantDataset = {
-    requireSplit("linear regression 3")
-    LinearRegression(vds, ys, covariates, root, useDosages, variantBlockSize)
+  def linreg(ys: Array[String], xs: Array[String], covs: Array[String] = Array.empty[String], root: String = "va.linreg", variantBlockSize: Int = 16): VariantDataset = {
+    requireSplit("linear regression")
+    LinearRegression(vds, ys, xs, covs, root, variantBlockSize)
   }
 
   def lmmreg(kinshipMatrix: KinshipMatrix,
