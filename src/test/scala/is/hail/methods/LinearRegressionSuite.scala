@@ -360,7 +360,7 @@ class LinearRegressionSuite extends SparkSuite {
   
   def isNaN(a: Annotation): Boolean = a.asInstanceOf[IndexedSeq[IndexedSeq[Double]]].apply(0)(0).isNaN
   def isNearly1(a: Annotation): Boolean = D_==(a.asInstanceOf[IndexedSeq[IndexedSeq[Double]]].apply(0)(0), 1.0)
-  def assertSingular(a: Annotation) { println(a); assert(a == null || isNaN(a) || isNearly1(a)) }
+  def assertSingular(a: Annotation) { assert(a == null || isNaN(a) || isNearly1(a)) }
   
   // ensuring that result for one phenotype and second fields is the same as with linreg
   @Test def testWithOneCovTwoFields() {
@@ -372,8 +372,6 @@ class LinearRegressionSuite extends SparkSuite {
     val qPval = vds.queryVA("va.linreg.pval")._2
 
     val am = vds.variantsAndAnnotations.collect().toMap
-
-    println(am)
     
     /*
     comparing to output of R code:
@@ -421,55 +419,5 @@ class LinearRegressionSuite extends SparkSuite {
     assertSingular(qSe(am(v8)))
     assertSingular(qSe(am(v9)))
     assertSingular(qSe(am(v10)))
-  }
-
-  // ensuring that result for one phenotype and dosages is the same as with linreg.
-  @Test def testWithTwoCovPhred2() {
-    val vds = vds0.linreg(Array("sa.pheno"), Array("g.dosage"), Array("sa.cov.Cov1", "sa.cov.Cov2"))
-
-    val qBeta = vds.queryVA("va.linreg.beta")._2
-    val qSe = vds.queryVA("va.linreg.se")._2
-    val qTstat = vds.queryVA("va.linreg.tstat")._2
-    val qPval = vds.queryVA("va.linreg.pval")._2
-
-    val am = vds.variantsAndAnnotations.collect().toMap
-    
-    /*
-    comparing to output of R code:
-    y = c(1, 1, 2, 2, 2, 2)
-    x = c(0.009900990296049406, 0.9900990100009803, 0.009900990296049406, 0.009900990296049406, 0.009900990296049406, 0.9900990100009803)
-    c1 = c(0, 2, 1, -2, -2, 4)
-    c2 = c(-1, 3, 5, 0, -4, 3)
-    df = data.frame(y, x, c1, c2)
-    fit <- lm(y ~ x + c1 + c2, data=df)
-    summary(fit)["coefficients"]
-    */
-
-    assertDouble(qBeta(am(v1)), -0.29166985)
-    assertDouble(qSe(am(v1)), 1.2996510)
-    assertDouble(qTstat(am(v1)), -0.22442167)
-    assertDouble(qPval(am(v1)), 0.84327106)
-
-    /*
-    v2 has two missing genotypes, comparing to output of R code as above with imputed genotypes:
-    x = c(0.9950495050004902, 1.980198019704931, 0.9950495050004902, 1.980198019704931, 0.009900990296049406, 0.009900990296049406)
-    */
-
-    assertDouble(qBeta(am(v2)), -0.5499320)
-    assertDouble(qSe(am(v2)), 0.3401110)
-    assertDouble(qTstat(am(v2)), -1.616919)
-    assertDouble(qPval(am(v2)), 0.24728705)
-
-    /*
-    v3 has two missing genotypes, comparing to output of R code as above with imputed genotypes:
-    x = c(0.009900990296049406, 0.7450495050747477, 0.9900990100009803, 0.9900990100009803, 0.9900990100009803, 0.7450495050747477)
-    */
-
-    assertDouble(qBeta(am(v3)), 1.09536219)
-    assertDouble(qSe(am(v3)), 0.6901002)
-    assertDouble(qTstat(am(v3)), 1.5872510)
-    assertDouble(qPval(am(v3)), 0.2533675)
-
-    assertSingular(qPval(am(v6)))
   }
 }

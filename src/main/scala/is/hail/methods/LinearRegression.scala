@@ -110,6 +110,7 @@ object LinearRegression {
         ec.set(1, va)
   
         val sampleMask = sampleMaskBc.value
+        val cols = (0 until nxs).toArray
         val data = Array.ofDim[Double](n * nxs)
         val sums = Array.ofDim[Double](nxs)
         val nMissings = Array.ofDim[Int](nxs)
@@ -118,8 +119,8 @@ object LinearRegression {
         val missingRows = new ArrayBuilder[Int]()
         val missingCols = new ArrayBuilder[Int]()
   
+        
         var r = 0
-        var c = 0
         var i = 0
         while (i < sampleMask.length) {
           val g = gsIter.next()
@@ -127,22 +128,17 @@ object LinearRegression {
             ec.set(2, sampleIdsBc.value(i))
             ec.set(3, sampleAnnotationsBc.value(i))
             ec.set(4, g)
-  
-            // FIXME
-            val row = (xs(), aToDouble).zipped.map { (e, td) => if (e == null) Double.NaN else td(e) } // how to handle Inf, -Inf?
-  
-            c = 0
-            while (c < nxs) {
-              val e = row(c)
-              if (!e.isNaN)
-                sums(c) += e
-              else {
+
+            (xs(), aToDouble, cols).zipped.map { (e, td, c) =>
+              if (e != null) {
+                val de = td(e)
+                sums(c) += de
+                data(c * n + r) = de
+              } else {
+                nMissings(c) += 1
                 missingRows += r
                 missingCols += c
-                nMissings(c) += 1
               }
-              data(c * n + r) = e
-              c += 1
             }
             r += 1
           }
@@ -153,16 +149,14 @@ object LinearRegression {
         i = 0
         while (i < missingRows.length) {
           val c = missingCols(i)
-          data(c * nxs + missingRows(i)) = means(c)
+          data(c * n + missingRows(i)) = means(c)
           i += 1
         }
   
         val X = new DenseMatrix[Double](n, nxs, data)
         val stat = LinearRegressionModel.fit(X, yBc.value, yypBc.value, QtBc.value, QtyBc.value, d)
         
-        val newAnnotation = inserter(va, stat.map(_.toAnnotation).orNull)
-        assert(newVAS.typeCheck(newAnnotation))
-        newAnnotation
+        inserter(va, stat.map(_.toAnnotation).orNull)
       }.copy(vaSignature = newVAS)
     }
   }
