@@ -65,6 +65,8 @@ object LDMatrix {
       variantsKept.length,
       variantsKept.length)
 
+    persistedVDS.unpersist()
+
     LDMatrix(scaledIndexedRowMatrix, variantsKept, nSamples)
   }
 
