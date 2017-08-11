@@ -83,6 +83,21 @@ object ToNormalizedRowMatrix {
   }
 }
 
+object ToIndexedRowMatrix {
+  def apply(vds: VariantDataset, useDosage: Boolean, sampleMask: Array[Boolean], completeSampleIndex: Array[Int]): (Array[Variant], IndexedRowMatrix) = {
+    require(vds.wasSplit)
+    val n = vds.nSamples
+    val variants = vds.variants.collect()
+    val variantIdxBc = vds.sparkContext.broadcast(variants.index)
+    val indexedRows = 
+      if (!useDosage)
+        vds.rdd.map { case (v, (va, gs)) => IndexedRow(variantIdxBc.value(v), Vectors.dense(RegressionUtils.hardCalls(gs, n, sampleMask).toArray)) } // FIXME: handle sparse?
+      else
+        vds.rdd.map { case (v, (va, gs)) => IndexedRow(variantIdxBc.value(v), Vectors.dense(RegressionUtils.dosages(gs, completeSampleIndex).toArray)) }
+    (variants, new IndexedRowMatrix(indexedRows, variants.size, n))
+  }
+}
+
 // each row has mean 0, norm sqrt(n), variance 1
 object ToNormalizedIndexedRowMatrix {
   def apply(vds: VariantDataset): IndexedRowMatrix = {

@@ -5,6 +5,7 @@ import is.hail.annotations.Annotation
 import is.hail.expr.Type
 import is.hail.utils._
 import org.apache.spark.mllib.linalg
+import org.apache.spark.mllib.linalg.distributed.BlockMatrix
 
 case class Eigendecomposition(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMatrix[Double], evals: DenseVector[Double]) {
   require(evects.rows == rowIds.length)
@@ -34,4 +35,9 @@ case class Eigendecomposition(rowSignature: Type, rowIds: Array[Annotation], eve
   def evectsSpark(): linalg.DenseMatrix = new linalg.DenseMatrix(evects.rows, evects.cols, evects.data, evects.isTranspose)
   
   def evalsArray(): Array[Double] = evals.toArray
+}
+
+case class EigendecompositionDist(rowSignature: Type, rowIds: Array[Annotation], evects: BlockMatrix, evals: DenseVector[Double]) {
+  require(evects.numRows() == rowIds.length) // FIXME: expensive
+  require(evects.numCols() == evals.length)   
 }

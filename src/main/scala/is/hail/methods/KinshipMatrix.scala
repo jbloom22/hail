@@ -2,13 +2,14 @@ package is.hail.methods
 
 import java.io.DataOutputStream
 
-import breeze.linalg.SparseVector
+import breeze.linalg._
 import is.hail.HailContext
 import is.hail.annotations.Annotation
+import is.hail.distributedmatrix.BlockMatrixIsDistributedMatrix
 import is.hail.expr.{TString, Type}
-import is.hail.stats.{Eigendecomposition, eigSymD}
+import is.hail.stats.{Eigendecomposition, EigendecompositionDist, eigSymD}
 import is.hail.utils._
-import org.apache.spark.mllib.linalg.Vectors
+import org.apache.spark.mllib.linalg.{Vectors => SparkVectors}
 import org.apache.spark.mllib.linalg.distributed.{IndexedRow, IndexedRowMatrix}
 
 import scala.collection.Searching._
@@ -38,18 +39,18 @@ case class KinshipMatrix(hc: HailContext, sampleSignature: Type, matrix: Indexed
 
     val filteredRows = matrix.rows.filter(ir => !sampleIndicesToDropSet(ir.index.toInt))
     val filteredRowsAndCols = filteredRows.map(ir => {
-      val InsertionPoint(numBelowToDelete) = sampleIndicesToDropArray.search(ir.index.toInt)
-      val index = ir.index - numBelowToDelete
+      val InsertionPoint(nBelowToDelete) = sampleIndicesToDropArray.search(ir.index.toInt)
+      val index = ir.index - nBelowToDelete
       val vecArray = ir.vector.toArray
-      val filteredArray = sampleIndicesToTakeArray.map(i => vecArray(i))
-      IndexedRow(index, Vectors.dense(filteredArray))
+      val filteredArray = sampleIndicesToTakeArray.map(vecArray)
+      IndexedRow(index, SparkVectors.dense(filteredArray))
     })
 
     KinshipMatrix(hc, sampleSignature, new IndexedRowMatrix(filteredRowsAndCols), filteredSamplesIds, nVariantsUsed)
   }
   
   def eigen(optNEigs: Option[Int]): Eigendecomposition = {
-    val K = matrix.toLocalMatrix().asBreeze().toDenseMatrix
+    val K = matrix.toLocalMatrix().asBreeze().asInstanceOf[DenseMatrix[Double]]
 
     info(s"Computing eigenvectors of kinship matrix...")
     val eigK = printTime(eigSymD(K))
@@ -70,6 +71,32 @@ case class KinshipMatrix(hc: HailContext, sampleSignature: Type, matrix: Indexed
         (eigK.eigenvectors(::, (n - nEigs) until n).copy, eigK.eigenvalues((n - nEigs) until n).copy)
     
     Eigendecomposition(sampleSignature, sampleIds, evects, evals)
+  }
+  
+  def eigenDist(optNEigs: Option[Int]): EigendecompositionDist = {
+    val K = matrix.toLocalMatrix().asBreeze().asInstanceOf[DenseMatrix[Double]]
+
+    info(s"Computing eigenvectors of kinship matrix...")
+    val eigK = printTime(eigSymD(K))
+
+    val maxRank = sampleIds.length min nVariantsUsed.toInt
+    val nEigs = optNEigs.getOrElse(maxRank)
+    optNEigs.foreach( k => if (k > nEigs) info(s"Requested $k evects but maximum rank is $maxRank."))
+    
+    info(s"Eigendecomposition complete, returning $nEigs eigenvectors.")
+
+    val n = K.cols
+    assert(n == eigK.eigenvectors.cols)
+    
+    val (evects, evals) =
+      if (nEigs == n)
+        (eigK.eigenvectors, eigK.eigenvalues)
+        else
+        (eigK.eigenvectors(::, (n - nEigs) until n), eigK.eigenvalues((n - nEigs) until n))
+      
+    val U = BlockMatrixIsDistributedMatrix.from(hc.sc, evects.asSpark(), 1024, 1024)
+    
+    EigendecompositionDist(sampleSignature, sampleIds, U, evals)
   }
 
   /**
