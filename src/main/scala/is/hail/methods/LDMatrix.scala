@@ -2,12 +2,14 @@ package is.hail.methods
 
 import breeze.linalg.*
 import is.hail.distributedmatrix.{BlockMatrixIsDistributedMatrix, DistributedMatrix}
+import is.hail.distributedmatrix.DistributedMatrix.implicits._
 import is.hail.utils._
-import is.hail.stats.{Eigendecomposition, RegressionUtils, ToNormalizedIndexedRowMatrix, eigSymD}
+import is.hail.stats._
 import is.hail.variant.{Variant, VariantDataset}
 import org.apache.spark.mllib.linalg
 import org.apache.spark.mllib.linalg.{DenseMatrix, Matrix, Vectors}
 import org.apache.spark.mllib.linalg.distributed.{BlockMatrix, IndexedRow, IndexedRowMatrix}
+
 
 object LDMatrix {
   /**
@@ -130,5 +132,60 @@ case class LDMatrix(matrix: IndexedRowMatrix, variants: Array[Variant], nSamples
     filteredVDS.unpersist()
     
     Eigendecomposition(vds.sSignature, vds.sampleIds.toArray, U, S_K)
+  }
+  
+  def eigenRRMDist(vds: VariantDataset, optNEigs: Option[Int]): EigendecompositionDist = {
+    val variantSet = variants.toSet
+
+    val maxRank = variants.length min nSamplesUsed
+    val nEigs = optNEigs.getOrElse(maxRank)
+    optNEigs.foreach( k => if (k > nEigs) info(s"Requested $k evects but maximum rank is $maxRank.") )
+
+    if (nEigs.toLong * vds.nSamples > Integer.MAX_VALUE)
+      fatal(s"$nEigs eigenvectors times ${vds.nSamples} samples exceeds 2^31 - 1, the maximum size of a local matrix.")
+    
+    val L = matrix.toLocalMatrix().asBreeze().toDenseMatrix
+
+    info(s"Computing eigenvectors of LD matrix...")
+    val eigL = printTime(eigSymD(L))
+    
+    info(s"Transforming $nEigs variant eigenvectors to sample eigenvectors...")
+
+    // G = normalized genotype matrix (n samples by m variants)
+    //   = U * sqrt(S) * V.t
+    // U = G * V * inv(sqrt(S))
+    // L = 1 / n * G.t * G = V * S_L * V.t
+    // K = 1 / m * G * G.t = U * S_K * U.t
+    // S_K = S_L * n / m
+    // S = S_K * m
+
+    val n = nSamplesUsed.toDouble
+    val m = variants.length
+    assert(m == eigL.eigenvectors.cols)
+    val V = eigL.eigenvectors(::, (m - nEigs) until m)
+    val S_K =
+      if (nEigs == m)
+        eigL.eigenvalues :* (n / m)
+      else
+        (eigL.eigenvalues((m - nEigs) until m) :* (n / m)).copy
+      
+    val c2 = 1.0 / math.sqrt(m)
+    val sqrtSInv = S_K.map(e => c2 / math.sqrt(e))
+
+    var filteredVDS = vds.filterVariants((v, _, _) => variantSet(v))
+    filteredVDS = filteredVDS.persist()
+    require(filteredVDS.variants.count() == variantSet.size, "Some variants in LD matrix are missing from VDS")
+
+    val dm = DistributedMatrix[BlockMatrix]
+    import dm.ops._
+
+    val VS = V(* , ::) :* sqrtSInv
+    
+    val G = ToNormalizedIndexedRowMatrix(filteredVDS).toBlockMatrixDense().t 
+    val U = G * VS.asSpark()
+   
+    filteredVDS.unpersist()
+
+    EigendecompositionDist(vds.sSignature, vds.sampleIds.toArray, U, S_K)
   }
 }

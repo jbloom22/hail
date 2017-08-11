@@ -12,7 +12,7 @@ import is.hail.io.vcf.{BufferedLineIterator, ExportVCF}
 import is.hail.keytable.KeyTable
 import is.hail.methods._
 import is.hail.sparkextras.{OrderedPartitioner, OrderedRDD}
-import is.hail.stats.{ComputeRRM, Eigendecomposition}
+import is.hail.stats.{ComputeRRM, Eigendecomposition, EigendecompositionDist}
 import is.hail.utils._
 import is.hail.variant.Variant.orderedKey
 import org.apache.hadoop
@@ -614,6 +614,22 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
 
     requireSplit("linear mixed regression")
     LinearMixedRegression.applyEigen(vds, eigen, y, covariates, useML, rootGA, rootVA,
+      runAssoc, delta, sparsityThreshold, useDosages)
+  }
+  
+  def lmmregEigenDist(eigenDist: EigendecompositionDist,
+    y: String,
+    covariates: Array[String] = Array.empty[String],
+    useML: Boolean = false,
+    rootGA: String = "global.lmmreg",
+    rootVA: String = "va.lmmreg",
+    runAssoc: Boolean = true,
+    delta: Option[Double] = None,
+    sparsityThreshold: Double = 1.0,
+    useDosages: Boolean = false): VariantDataset = {
+
+    requireSplit("linear mixed regression")
+    LinearMixedRegressionDist.applyEigenDist(vds, eigenDist, y, covariates, useML, rootGA, rootVA,
       runAssoc, delta, sparsityThreshold, useDosages)
   }
 

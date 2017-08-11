@@ -2,16 +2,8 @@ package is.hail.utils.richUtils
 
 import breeze.linalg.DenseMatrix
 import is.hail.utils.ArrayBuilder
+import org.apache.spark.mllib.linalg.{DenseMatrix => SparkDenseMatrix}
 
-object RichDenseMatrixDouble {
-  def horzcat(oms: Option[DenseMatrix[Double]]*): Option[DenseMatrix[Double]] = {
-    val ms = oms.flatten
-    if (ms.isEmpty)
-      None
-    else
-      Some(DenseMatrix.horzcat(ms: _*))
-  }
-}
 
 // Not supporting generic T because its difficult to do with ArrayBuilder and not needed yet. See:
 // http://stackoverflow.com/questions/16306408/boilerplate-free-scala-arraybuilder-specialization
@@ -50,4 +42,12 @@ class RichDenseMatrixDouble(val m: DenseMatrix[Double]) extends AnyVal {
     else
       None
   }
+  
+  def toArrayShallow: Array[Double] =
+    if (m.offset == 0 && m.majorStride == m.rows && !m.isTranspose)
+      m.data
+    else
+      m.toArray
+  
+  def asSpark(): SparkDenseMatrix = new SparkDenseMatrix(m.rows, m.cols, this.toArrayShallow, m.isTranspose)
 }
