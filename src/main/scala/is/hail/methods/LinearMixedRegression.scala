@@ -159,10 +159,10 @@ object LinearMixedRegression {
         val Qt = qr.reduced.justQ(diagLMM.TC).t
         val QtTy = Qt * diagLMM.Ty
         val TyQtTy = (diagLMM.Ty dot diagLMM.Ty) - (QtTy dot QtTy)
-        new FullRankScalarLMM(diagLMM.Ty, diagLMM.TyTy, Qt, QtTy, TyQtTy, T, diagLMM.logNullS2, useML)
+        new FullRankScalarLMM(diagLMM.Ty, diagLMM.TyTy, Qt, QtTy, TyQtTy, T, diagLMM.logNullS2, useML, useDosages)
       }
       else
-        new LowRankScalarLMM(lmmConstants, delta, diagLMM.logNullS2, useML)
+        new LowRankScalarLMM(lmmConstants, delta, diagLMM.logNullS2, useML, useDosages)
 
       val scalarLMMBc = sc.broadcast(scalarLMM)
 
@@ -221,7 +221,8 @@ class FullRankScalarLMM(
   yQty: Double,
   T: DenseMatrix[Double],
   logNullS2: Double,
-  useML: Boolean) extends ScalarLMM {
+  useML: Boolean,
+  useDosages: Boolean) extends ScalarLMM {
 
   val n = y.length
   val invDf = 1.0 / (if (useML) n else n - Qt.rows)
@@ -261,7 +262,7 @@ class FullRankScalarLMM(
 }
 
 // Handles low-rank case, but is slower than ScalarLMM on full-rank case
-class LowRankScalarLMM(con: LMMConstants, delta: Double, logNullS2: Double, useML: Boolean) extends ScalarLMM {
+class LowRankScalarLMM(con: LMMConstants, delta: Double, logNullS2: Double, useML: Boolean, useDosages: Boolean) extends ScalarLMM {
   val n = con.n
   val d = con.d
   val k = con.S.length
@@ -324,6 +325,8 @@ class LowRankScalarLMM(con: LMMConstants, delta: Double, logNullS2: Double, useM
       val x = X(::, idx)
       val ZUtx = ZUtX(::, idx)
 
+      //val constant = !useDosages && RegressionUtils.constantVector(x)
+
       val CtC = DenseMatrix.zeros[Double](d + 1, d + 1)
       CtC(0, 0) = x dot x
       CtC(r1, r2) :=  covt * x
@@ -343,12 +346,15 @@ class LowRankScalarLMM(con: LMMConstants, delta: Double, logNullS2: Double, useM
 
       val CdC = invDelta * CtC + CzC
 
-      val b = CdC \ Cdy
-      val s2 = invDf * (ydy - (Cdy dot b))
-      val chi2 = n * (logNullS2 - math.log(s2))
-      val p = chiSquaredTail(1, chi2)
-
-      Annotation(b(0), s2, chi2, p)
+      try {
+        val b = CdC \ Cdy
+        val s2 = invDf * (ydy - (Cdy dot b))
+        val chi2 = n * (logNullS2 - math.log(s2))
+        val p = chiSquaredTail(1, chi2)
+        Annotation(b(0), s2, chi2, p)
+      } catch {
+        case e: MatrixSingularException => null
+      }
     }.toArray
   }
 }
