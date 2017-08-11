@@ -6,7 +6,7 @@ import is.hail.annotations._
 import is.hail.expr._
 import is.hail.stats._
 import is.hail.utils._
-import is.hail.variant.{Genotype, Variant, VariantDataset}
+import is.hail.variant.VariantDataset
 import org.apache.commons.math3.analysis.UnivariateFunction
 import org.apache.commons.math3.optim.MaxEval
 import org.apache.commons.math3.optim.nonlinear.scalar.GoalType
@@ -20,7 +20,6 @@ object LinearMixedRegression {
     ("chi2", TDouble),
     ("pval", TDouble))
 
-  
   def apply(
     vds: VariantDataset,
     kinshipMatrix: KinshipMatrix,
@@ -50,7 +49,7 @@ object LinearMixedRegression {
   
   def applyEigen(
     vds: VariantDataset,
-    eigenDecomposition: Eigendecomposition,
+    eigen: Eigendecomposition,
     yExpr: String,
     covExpr: Array[String],
     useML: Boolean,
@@ -93,7 +92,7 @@ object LinearMixedRegression {
       case None => info(s"lmmreg: Estimating delta using ${ if (useML) "ML" else "REML" }... ")
     }
 
-    val Eigendecomposition(_, rowIds, evects, evals) = eigenDecomposition.filterRows(vds.sSignature, completeSamplesSet)
+    val Eigendecomposition(_, rowIds, evects, evals) = eigen.filterRows(vds.sSignature, completeSamplesSet)
     
     if (! completeSamples.sameElements(rowIds))
       fatal("Bad stuff")
@@ -154,18 +153,20 @@ object LinearMixedRegression {
 
       info(s"lmmreg: Computing statistics for each variant...")
 
-      val scalarLMM = if (nEigs == n) {
-        val T = Ut(::, *) :* diagLMM.sqrtInvD
+      val useFullRank = nEigs == n
+      
+      val (scalarLMM, projection) = if (useFullRank) {
         val Qt = qr.reduced.justQ(diagLMM.TC).t
         val QtTy = Qt * diagLMM.Ty
         val TyQtTy = (diagLMM.Ty dot diagLMM.Ty) - (QtTy dot QtTy)
-        new FullRankScalarLMM(diagLMM.Ty, diagLMM.TyTy, Qt, QtTy, TyQtTy, T, diagLMM.logNullS2, useML)
-      }
-      else
-        new LowRankScalarLMM(lmmConstants, delta, diagLMM.logNullS2, useML)
+        (new FullRankScalarLMM(diagLMM.Ty, diagLMM.TyTy, Qt, QtTy, TyQtTy, diagLMM.logNullS2, useML),
+          Ut(::, *) :* diagLMM.sqrtInvD)
+      } else
+        (new LowRankScalarLMM(lmmConstants, delta, diagLMM.logNullS2, useML), Ut)
 
       val scalarLMMBc = sc.broadcast(scalarLMM)
-
+      val projectionBc = sc.broadcast(projection)
+      
       val blockSize = 128
       val newRDD = vds2.rdd.mapPartitions({it =>
         val missingSamples = new ArrayBuilder[Int]
@@ -193,9 +194,14 @@ object LinearMixedRegression {
               i += 1
             }
             
-            (block, scalarLMMBc.value.likelihoodRatioTestMatrix(X))
-              .zipped
-              .map { case ((v, (va, gs)), a) => (v, (inserter(va, a), gs)) }
+            val annotations = scalarLMMBc.value match {
+              case sclr: FullRankScalarLMM =>
+                sclr.likelihoodRatioTestBlock(projectionBc.value * X)
+              case sclr: LowRankScalarLMM =>
+                sclr.likelihoodRatioTestBlockLowRank(X, projectionBc.value * X)
+            }
+            
+            (block, annotations).zipped.map { case ((v, (va, gs)), a) => (v, (inserter(va, a), gs)) }
           } )
       }, preservesPartitioning = true)
 
@@ -207,10 +213,7 @@ object LinearMixedRegression {
   }
 }
 
-trait ScalarLMM {
-  def likelihoodRatioTest(v: Vector[Double]): Annotation
-  def likelihoodRatioTestMatrix(X: DenseMatrix[Double]): Array[Annotation]
-}
+trait ScalarLMM
 
 // Handles full-rank case
 class FullRankScalarLMM(
@@ -219,15 +222,13 @@ class FullRankScalarLMM(
   Qt: DenseMatrix[Double],
   Qty: DenseVector[Double],
   yQty: Double,
-  T: DenseMatrix[Double],
   logNullS2: Double,
   useML: Boolean) extends ScalarLMM {
 
   val n = y.length
   val invDf = 1.0 / (if (useML) n else n - Qt.rows)
 
-  def likelihoodRatioTest(x0: Vector[Double]): Annotation = {
-    val x = T * x0
+  def likelihoodRatioTest(x: Vector[Double]): Annotation = {
     val n = y.length
     val Qtx = Qt * x
     val xQtx: Double = (x dot x) - (Qtx dot Qtx)
@@ -241,23 +242,8 @@ class FullRankScalarLMM(
     Annotation(b, s2, chi2, p)
   }
 
-  def likelihoodRatioTestMatrix(X0: DenseMatrix[Double]): Array[Annotation] = {
-    val X = T * X0
-    (0 until X.cols).map { idx =>
-      val x = X(::, idx)
-      val n = y.length
-      val Qtx = Qt * x
-      val xQtx: Double = (x dot x) - (Qtx dot Qtx)
-      val xQty: Double = (x dot y) - (Qtx dot Qty)
-
-      val b: Double = xQty / xQtx
-      val s2 = invDf * (yQty - xQty * b)
-      val chi2 = n * (logNullS2 - math.log(s2))
-      val p = chiSquaredTail(1, chi2)
-
-      Annotation(b, s2, chi2, p)
-    }.toArray
-  }
+  def likelihoodRatioTestBlock(X: DenseMatrix[Double]): Array[Annotation] =
+    (0 until X.cols).map(i => likelihoodRatioTest(X(::, i))).toArray
 }
 
 // Handles low-rank case, but is slower than ScalarLMM on full-rank case
@@ -267,7 +253,6 @@ class LowRankScalarLMM(con: LMMConstants, delta: Double, logNullS2: Double, useM
   val k = con.S.length
   val y = con.y
   val covt = con.C.t
-  val Ut = con.Ut
   val Uty = con.Uty
   val Utcov = con.UtC
   val covtcov = con.CtC
@@ -283,7 +268,7 @@ class LowRankScalarLMM(con: LMMConstants, delta: Double, logNullS2: Double, useM
   val r1 = 0 to 0
   val r2 = 1 to d
   
-  def likelihoodRatioTest(x: Vector[Double]): Annotation = {
+  def likelihoodRatioTestLowRank(x: Vector[Double], Utx: DenseVector[Double]): Annotation = {
     
     val CtC = DenseMatrix.zeros[Double](d + 1, d + 1)
     CtC(0, 0) = x dot x
@@ -291,7 +276,6 @@ class LowRankScalarLMM(con: LMMConstants, delta: Double, logNullS2: Double, useM
     CtC(r2, r1) := CtC(r1, r2).t
     CtC(r2, r2) := con.CtC
 
-    val Utx = Ut * x
     val UtC = DenseMatrix.horzcat(Utx.toDenseMatrix.t, Utcov)
     val ZUtx = Utx :* Z
     
@@ -314,43 +298,8 @@ class LowRankScalarLMM(con: LMMConstants, delta: Double, logNullS2: Double, useM
     Annotation(b(0), s2, chi2, p)
   }
 
-  def likelihoodRatioTestMatrix(X: DenseMatrix[Double]): Array[Annotation] = {
-    val UtX = Ut * X
-    val ZUtX = UtX(::, *) :* Z
-    val Xty = X.t * y
-
-    (0 until UtX.cols).map{idx =>
-      val Utx = UtX(::, idx)
-      val x = X(::, idx)
-      val ZUtx = ZUtX(::, idx)
-
-      val CtC = DenseMatrix.zeros[Double](d + 1, d + 1)
-      CtC(0, 0) = x dot x
-      CtC(r1, r2) :=  covt * x
-      CtC(r2, r1) := CtC(r1, r2).t
-      CtC(r2, r2) := con.CtC
-
-      val UtC = DenseMatrix.horzcat(Utx.toDenseMatrix.t, Utcov)
-
-      val Cty = DenseVector.vertcat(DenseVector(Xty(idx)), covty)
-      val Cdy = invDelta * Cty + (UtC.t  * (Uty :* Z))
-
-      val CzC = DenseMatrix.zeros[Double](d + 1, d + 1)
-      CzC(0, 0) = Utx dot ZUtx
-      CzC(r1, r2) := Utcov.t * ZUtx
-      CzC(r2, r1) := CzC(r1, r2).t
-      CzC(r2, r2) := UtcovZUtcov
-
-      val CdC = invDelta * CtC + CzC
-
-      val b = CdC \ Cdy
-      val s2 = invDf * (ydy - (Cdy dot b))
-      val chi2 = n * (logNullS2 - math.log(s2))
-      val p = chiSquaredTail(1, chi2)
-
-      Annotation(b(0), s2, chi2, p)
-    }.toArray
-  }
+  def likelihoodRatioTestBlockLowRank(X: DenseMatrix[Double], UtX: DenseMatrix[Double]): Array[Annotation] =
+    (0 until UtX.cols).map(i => likelihoodRatioTestLowRank(X(::, i), UtX(::, i))).toArray
 }
 
 object DiagLMM {
@@ -554,10 +503,10 @@ object LMMConstants {
     val n = y.length
     val d = C.cols
 
-    new LMMConstants(y, C, S, Ut, Uty, UtC, Cty, CtC, yty, n, d)
+    new LMMConstants(y, C, S, Uty, UtC, Cty, CtC, yty, n, d)
   }
 }
 
-case class LMMConstants(y: DenseVector[Double], C: DenseMatrix[Double], S: DenseVector[Double], Ut: DenseMatrix[Double],
+case class LMMConstants(y: DenseVector[Double], C: DenseMatrix[Double], S: DenseVector[Double],
                         Uty: DenseVector[Double], UtC: DenseMatrix[Double], Cty: DenseVector[Double],
                         CtC: DenseMatrix[Double], yty: Double, n: Int, d: Int)
