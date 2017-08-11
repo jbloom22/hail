@@ -49,12 +49,5 @@ class RichDenseMatrixDouble(val m: DenseMatrix[Double]) extends AnyVal {
     else
       m.toArray
   
-  def asSpark(): SparkDenseMatrix =
-    if (m.offset == 0 && m.majorStride == m.rows)
-      if (m.isTranspose)
-        new SparkDenseMatrix(m.rows, m.cols, m.data, true)
-      else
-        new SparkDenseMatrix(m.rows, m.cols, m.data, false)
-    else
-      new SparkDenseMatrix(m.rows, m.cols, m.toArray, false)      
+  def asSpark(): SparkDenseMatrix = new SparkDenseMatrix(m.rows, m.cols, this.toArrayShallow, m.isTranspose)
 }
