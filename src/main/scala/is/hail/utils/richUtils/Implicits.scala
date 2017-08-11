@@ -6,7 +6,7 @@ import is.hail.variant.Variant
 import org.apache.hadoop
 import org.apache.spark.SparkContext
 import org.apache.spark.mllib.linalg.Matrix
-import org.apache.spark.mllib.linalg.distributed.{IndexedRow, IndexedRowMatrix}
+import org.apache.spark.mllib.linalg.distributed.{BlockMatrix, IndexedRow, IndexedRowMatrix}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Row, SQLContext}
 import org.apache.spark.storage.StorageLevel
@@ -43,6 +43,8 @@ trait Implicits {
   implicit def toRichInt(i: Int): RichInt = new RichInt(i)
   
   implicit def toRichIndexedRowMatrix(irm: IndexedRowMatrix): RichIndexedRowMatrix = new RichIndexedRowMatrix(irm)
+
+  implicit def toRichBlockMatrix(bm: BlockMatrix): RichBlockMatrix = new RichBlockMatrix(bm)
 
   implicit def toRichIntPairTraversableOnce[V](t: TraversableOnce[(Int, V)]): RichIntPairTraversableOnce[V] =
     new RichIntPairTraversableOnce[V](t)

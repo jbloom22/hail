@@ -1,7 +1,7 @@
 package is.hail.utils.richUtils
 
 import org.apache.spark.Partitioner
-import org.apache.spark.mllib.linalg.{DenseVector}
+import org.apache.spark.mllib.linalg.DenseVector
 import org.apache.spark.mllib.linalg.distributed.{BlockMatrix, IndexedRow, IndexedRowMatrix}
 import breeze.linalg.{DenseVector => BDV, Vector => BV}
 
@@ -27,6 +27,6 @@ class RichBlockMatrix (bm: BlockMatrix) {
       }
       new IndexedRow(rowIdx, new DenseVector(wholeVector.data))
     }
-    new IndexedRowMatrix(rows)
+    new IndexedRowMatrix(rows, bm.numRows(), cols)
   }
 }
