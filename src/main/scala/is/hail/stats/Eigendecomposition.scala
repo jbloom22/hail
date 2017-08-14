@@ -2,8 +2,10 @@ package is.hail.stats
 
 import breeze.linalg.{DenseMatrix, DenseVector}
 import is.hail.annotations.Annotation
+import is.hail.distributedmatrix.BlockMatrixIsDistributedMatrix
 import is.hail.expr.Type
 import is.hail.utils._
+import org.apache.spark.SparkContext
 import org.apache.spark.mllib.linalg
 import org.apache.spark.mllib.linalg.distributed.BlockMatrix
 
@@ -35,6 +37,11 @@ case class Eigendecomposition(rowSignature: Type, rowIds: Array[Annotation], eve
   def evectsSpark(): linalg.DenseMatrix = new linalg.DenseMatrix(evects.rows, evects.cols, evects.data, evects.isTranspose)
   
   def evalsArray(): Array[Double] = evals.toArray
+  
+  def distribute(sc: SparkContext): EigendecompositionDist = {
+    val U = BlockMatrixIsDistributedMatrix.from(sc, evects.asSpark(), 1024, 1024)
+    EigendecompositionDist(rowSignature, rowIds, U, evals)
+  }
 }
 
 case class EigendecompositionDist(rowSignature: Type, rowIds: Array[Annotation], evects: BlockMatrix, evals: DenseVector[Double]) {
