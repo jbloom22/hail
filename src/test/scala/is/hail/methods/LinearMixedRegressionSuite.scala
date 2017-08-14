@@ -13,7 +13,6 @@ import is.hail.TestUtils._
 import is.hail.{SparkSuite, TestUtils}
 import org.testng.annotations.Test
 
-
 class LinearMixedRegressionSuite extends SparkSuite {
   @Test def lmmSmallExampleTest() {
 
@@ -70,14 +69,20 @@ class LinearMixedRegressionSuite extends SparkSuite {
     val Ut = eigRRM.eigenvectors.t
     val S = eigRRM.eigenvalues
 
-    val constants = LMMConstants(y, C, S, Ut)
-
-    val model = DiagLMM(LMMConstants(y, C, S, Ut), optDelta = Some(delta))
+    val UtC = Ut * C
+    val Uty = Ut * y
+    val CtC = C.t * C
+    val Cty = C.t * y
+    val yty = y.t * y
+    
+    val constants = LMMConstants(y, C, S, Uty, UtC, Cty, CtC, yty, n, C.cols)
+    
+    val model = DiagLMM(constants, optDelta = Some(delta))
 
     assertVectorEqualityDouble(beta, model.globalB)
     assert(D_==(sg2, model.globalS2))
 
-    val modelML = DiagLMM(LMMConstants(y, C, S, Ut), optDelta = Some(delta), useML = true)
+    val modelML = DiagLMM(constants, optDelta = Some(delta), useML = true)
     assertVectorEqualityDouble(beta, modelML.globalB)
     assert(D_==(sg2 * (n - c) / n, modelML.globalS2))
     
@@ -227,8 +232,14 @@ class LinearMixedRegressionSuite extends SparkSuite {
     val Ut = eigRRM.eigenvectors.t
     val S = eigRRM.eigenvalues
 
-    val constants = LMMConstants(y, C, S, Ut)
-
+    val UtC = Ut * C
+    val Uty = Ut * y
+    val CtC = C.t * C
+    val Cty = C.t * y
+    val yty = y.t * y    
+    
+    val constants = LMMConstants(y, C, S, Uty, UtC, Cty, CtC, yty, n, C.cols)
+    
     val model = DiagLMM(constants, optDelta = Some(delta))
 
     assertVectorEqualityDouble(beta, model.globalB)
@@ -465,21 +476,21 @@ class LinearMixedRegressionSuite extends SparkSuite {
     
     val kinshipMatrix = vdsChr3.rrm()
     val ldMatrix = vdsChr3.ldMatrix()
-    
-    val eigenFromKinship = kinshipMatrix.eigen(None)
-    val eigenFromLD = ldMatrix.eigenRRM(vdsChr3, None)
-    val eigenFromKinshipDist = kinshipMatrix.eigenDist(None)
-    val eigenFromLDDist = ldMatrix.eigenRRMDist(vdsChr3, None)
-    
-    val vdsRRM = vdsChr1.lmmregEigen(eigenFromKinship, "sa.pheno", Array("sa.cov"))
-    val vdsLD = vdsChr1.lmmregEigen(eigenFromLD, "sa.pheno", Array("sa.cov"))
-    val vdsRRMDist = vdsChr1.lmmregEigenDist(eigenFromKinshipDist, "sa.pheno", Array("sa.cov"))
-    val vdsLDDist = vdsChr1.lmmregEigenDist(eigenFromLDDist, "sa.pheno", Array("sa.cov"))
+
+    val vdsRRM = vdsChr1.lmmregEigen(kinshipMatrix.eigen(None), "sa.pheno", Array("sa.cov"))
+    val vdsLD = vdsChr1.lmmregEigen(ldMatrix.eigenRRM(vdsChr3, None), "sa.pheno", Array("sa.cov"))
+    val vdsRRMDist = vdsChr1.lmmregEigenDist(kinshipMatrix.eigenDist(None), "sa.pheno", Array("sa.cov")) // FIXME!
+    val vdsLDDist = vdsChr1.lmmregEigenDist(ldMatrix.eigenRRMDist(vdsChr3, None), "sa.pheno", Array("sa.cov"))
     
     assert(vdsLD.countVariants() == vdsChr1.countVariants())
 
     globalLMMCompare(vdsRRM, vdsLD)
+    globalLMMCompare(vdsRRM, vdsRRMDist)
+    globalLMMCompare(vdsRRM, vdsLDDist)
+    
     variantAnnotationLMMCompare(vdsRRM, vdsLD)
+    variantAnnotationLMMCompare(vdsRRM, vdsRRMDist)
+    variantAnnotationLMMCompare(vdsRRM, vdsLDDist)
   }
 
   @Test def testLDAndRRMAreEquivalent() {
@@ -550,7 +561,7 @@ class LinearMixedRegressionSuite extends SparkSuite {
     
     val lmmreg = vdsSmall.lmmreg(kinshipMatrix, "sa.pheno")
     val lmmregKinship = vdsSmall.lmmreg(kinshipMatrix, "sa.pheno", nEigs = Some(3))
-    val lmmregLD = vdsSmall.lmmregEigen(ldMatrix.eigenRRM(vdsSmall, Some(3))  , "sa.pheno")
+    val lmmregLD = vdsSmall.lmmregEigen(ldMatrix.eigenRRM(vdsSmall, Some(3)), "sa.pheno")
     val lmmregKinshipDist = vdsSmall.lmmregEigenDist(kinshipMatrix.eigenDist(Some(3))  , "sa.pheno")
     val lmmregLDDist = vdsSmall.lmmregEigenDist(ldMatrix.eigenRRMDist(vdsSmall, Some(3)), "sa.pheno")
 
@@ -560,5 +571,16 @@ class LinearMixedRegressionSuite extends SparkSuite {
     globalLMMCompare(lmmreg, lmmregLDDist)
     
     assert(lmmregKinship.queryGlobal("global.lmmreg.nEigs")._2.asInstanceOf[Int] == 3)
+    
+    val lmmregKinship1 = vdsSmall.lmmreg(kinshipMatrix, "sa.pheno", nEigs = Some(1))
+    val lmmregLD1 = vdsSmall.lmmregEigen(ldMatrix.eigenRRM(vdsSmall, Some(1)), "sa.pheno")
+    val lmmregKinshipDist1 = vdsSmall.lmmregEigenDist(kinshipMatrix.eigenDist(Some(1))  , "sa.pheno")
+    val lmmregLDDist1 = vdsSmall.lmmregEigenDist(ldMatrix.eigenRRMDist(vdsSmall, Some(1)), "sa.pheno")
+
+    globalLMMCompare(lmmregKinship1, lmmregLD1)
+    globalLMMCompare(lmmregKinship1, lmmregKinshipDist1)
+    globalLMMCompare(lmmregKinship1, lmmregLDDist1)
+    
+    assert(lmmregKinship1.queryGlobal("global.lmmreg.nEigs")._2.asInstanceOf[Int] == 1)
   }
 }
