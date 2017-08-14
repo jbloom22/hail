@@ -67,7 +67,7 @@ case class KinshipMatrix(hc: HailContext, sampleSignature: Type, matrix: Indexed
     val (evects, evals) =
       if (nEigs == n)
         (eigK.eigenvectors, eigK.eigenvalues)
-        else
+      else
         (eigK.eigenvectors(::, (n - nEigs) until n).copy, eigK.eigenvalues((n - nEigs) until n).copy)
     
     Eigendecomposition(sampleSignature, sampleIds, evects, evals)
