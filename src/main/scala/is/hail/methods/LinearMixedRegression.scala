@@ -173,54 +173,37 @@ object LinearMixedRegression {
         } else {
           val scalarLMM = LowRankScalarLMM(lmmConstants, diagLMM.delta, diagLMM.logNullS2, useML)
           val scalarLMMBc = sc.broadcast(scalarLMM)
-          val projectionBc = sc.broadcast(Ut)
+          val UtBc = sc.broadcast(Ut)
 
           vds1.rdd.mapPartitions({ it =>
             val sclr = scalarLMMBc.value
 
-            val r2 = 1 to c
+            val r1 = 1 to c
 
             val CtC = DenseMatrix.zeros[Double](c + 1, c + 1)
-            CtC(r2, r2) := sclr.con.CtC
+            CtC(r1, r1) := sclr.con.CtC
 
             val UtC = DenseMatrix.zeros[Double](nEigs, c + 1)
-            UtC(::, r2) := sclr.Utcov
+            UtC(::, r1) := sclr.con.UtC
 
             val Cty = DenseVector.zeros[Double](c + 1)
-            Cty(r2) := sclr.covty
+            Cty(r1) := sclr.con.Cty
 
             val CzC = DenseMatrix.zeros[Double](c + 1, c + 1)
-            CzC(r2, r2) := sclr.UtcovZUtcov
+            CzC(r1, r1) := sclr.UtcovZUtcov
 
             val missingSamples = new ArrayBuilder[Int]
+            val x = DenseVector.zeros[Double](n)
 
-            // columns are genotype vectors
-            var X: DenseMatrix[Double] = null
+            it.map { case (v, (va, gs)) =>
+              if (useDosages)
+                RegressionUtils.dosages(x, gs, completeSampleIndexBc.value, missingSamples)
+              else
+                x := RegressionUtils.hardCalls(gs, n, sampleMaskBc.value) // No special treatment of constant
 
-            it.grouped(blockSize)
-              .flatMap(git => {
-                val block = git.toArray
-                val blockLength = block.length
+              val annotation = sclr.likelihoodRatioTestLowRank(x, UtBc.value * x, CtC, UtC, Cty, CzC)
 
-                if (X == null || X.cols != blockLength)
-                  X = new DenseMatrix[Double](n, blockLength)
-
-                var i = 0
-                while (i < blockLength) {
-                  val (_, (_, gs)) = block(i)
-
-                  if (useDosages)
-                    RegressionUtils.dosages(X(::, i), gs, completeSampleIndexBc.value, missingSamples)
-                  else
-                    X(::, i) := RegressionUtils.hardCalls(gs, n, sampleMaskBc.value) // No special treatment of constant
-
-                  i += 1
-                }
-
-                val annotations = sclr.likelihoodRatioTestBlockLowRank(X, projectionBc.value * X, CtC, UtC, Cty, CzC)
-
-                (block, annotations).zipped.map { case ((v, (va, gs)), a) => (v, (inserter(va, a), gs)) }
-              })
+              (v, (inserter(va, annotation), gs)) }
           }, preservesPartitioning = true)
         }
 
@@ -477,63 +460,54 @@ class FullRankScalarLMM(
   val n = y.length
   val invDf = 1.0 / (if (useML) n else n - Qt.rows)
 
-  def likelihoodRatioTest(x: Vector[Double]): Annotation = {
-    val n = y.length
-    val Qtx = Qt * x
-    val xQtx: Double = (x dot x) - (Qtx dot Qtx)
-    val xQty: Double = (x dot y) - (Qtx dot Qty)
+  def likelihoodRatioTestBlock(X: DenseMatrix[Double]): Array[Annotation] = {
+    val n = y.length.toDouble
+    val QtX = Qt * X
+    val XQtX = X.t(*, ::).map(r => r dot r) - QtX.t(*, ::).map(r => r dot r)
+    val XQty = X.t * y - QtX.t * Qty
 
-    val b: Double = xQty / xQtx
-    val s2 = invDf * (yQty - xQty * b)
-    val chi2 = n * (logNullS2 - math.log(s2))
-    val p = chiSquaredTail(1, chi2)
-
-    Annotation(b, s2, chi2, p)
+    val b = XQty :/ XQtX
+    val s2 = invDf * (yQty - (XQty :* b))
+    val chi2 = n * (logNullS2 - breeze.numerics.log(s2))
+    val p = chi2.map(c => chiSquaredTail(1, c))
+    
+    Array.tabulate(X.cols)(i => Annotation(b(i), s2(i), chi2(i), p(i)))
   }
-
-  def likelihoodRatioTestBlock(X: DenseMatrix[Double]): Array[Annotation] =
-    (0 until X.cols).map(i => likelihoodRatioTest(X(::, i))).toArray
 }
 
 // Handles low-rank case, but is slower than ScalarLMM on full-rank case
 case class LowRankScalarLMM(con: LMMConstants, delta: Double, logNullS2: Double, useML: Boolean) extends ScalarLMM {
   val n = con.n
-  val c = con.c
-  val k = con.S.length
-  val y = con.y
-  val covt = con.C.t
   val Uty = con.Uty
   val Utcov = con.UtC
-  val covtcov = con.CtC
-  val covty = con.Cty
 
-  val invDf = 1d / (if (useML) n else n - c)
+  val invDf = 1d / (if (useML) n else n - con.c)
   val invDelta = 1 / delta
 
   val Z = (con.S + delta).map(1 / _ - invDelta)
   val ydy = con.yty / delta + (Uty dot (Uty :* Z))
   val UtcovZUtcov = Utcov.t * (Utcov(::, *) :* Z)
 
-  val r1 = 0 to 0
-  val r2 = 1 to c
+  val r0 = 0 to 0
+  val r1 = 1 to con.c
 
   def likelihoodRatioTestLowRank(x: Vector[Double], Utx: DenseVector[Double], CtC: DenseMatrix[Double], UtC: DenseMatrix[Double], Cty: DenseVector[Double], CzC: DenseMatrix[Double]): Annotation = {
 
     CtC(0, 0) = x dot x
-    CtC(r1, r2) := covt * x
-    CtC(r2, r1) := CtC(r1, r2).t
+    CtC(r0, r1) := con.C.t * x
+    CtC(r1, r0) := CtC(r0, r1).t
 
     UtC(::, 0) := Utx
 
-    Cty(0) = x dot y
+    Cty(0) = x dot con.y
 
     val Cdy = invDelta * Cty + (UtC.t * (Uty :* Z))
 
     val ZUtx = Utx :* Z
 
     CzC(0, 0) = Utx dot ZUtx
-    CzC(r1, r2) := Utcov.t * ZUtx
-    CzC(r2, r1) := CzC(r1, r2).t
+    CzC(r0, r1) := Utcov.t * ZUtx
+    CzC(r1, r0) := CzC(r0, r1).t
 
     val CdC = invDelta * CtC + CzC
 
@@ -544,7 +518,4 @@ case class LowRankScalarLMM(con: LMMConstants, delta: Double, logNullS2: Double,
 
     Annotation(b(0), s2, chi2, p)
   }
-
-  def likelihoodRatioTestBlockLowRank(X: DenseMatrix[Double], UtX: DenseMatrix[Double], CtC: DenseMatrix[Double], UtC: DenseMatrix[Double], Cty: DenseVector[Double], CzC: DenseMatrix[Double]): Array[Annotation] =
-    (0 until UtX.cols).map(i => likelihoodRatioTestLowRank(X(::, i), UtX(::, i), CtC, UtC, Cty, CzC)).toArray
 }
