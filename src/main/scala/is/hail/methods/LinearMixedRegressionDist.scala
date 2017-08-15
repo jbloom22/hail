@@ -170,45 +170,24 @@ object LinearMixedRegressionDist {
             UtC(::, r2) := sclr.Utcov
 
             val Cty = DenseVector.zeros[Double](c + 1)
-            Cty(r2) := sclr.covty
+            Cty(r2) := sclr.con.Cty
 
             val CzC = DenseMatrix.zeros[Double](c + 1, c + 1)
             CzC(r2, r2) := sclr.UtcovZUtcov
 
             val missingSamples = new ArrayBuilder[Int]
+            val x = DenseVector.zeros[Double](n)
 
-            // columns are genotype vectors
-            var X: DenseMatrix[Double] = null
-            var projX: DenseMatrix[Double] = null
+            it.map { case (v, ((va, gs), Some(px))) =>
+              if (useDosages)
+                RegressionUtils.dosages(x, gs, completeSampleIndexBc.value, missingSamples)
+              else
+                x := RegressionUtils.hardCalls(gs, n, sampleMaskBc.value) // No special treatment of constant
 
-            it.grouped(blockSize)
-              .flatMap(git => {
-                val block = git.toArray
-                val blockLength = block.length
+              val annotation = sclr.likelihoodRatioTestLowRank(x, px, CtC, UtC, Cty, CzC)
 
-                if (X == null || X.cols != blockLength) {
-                  X = new DenseMatrix[Double](n, blockLength)
-                  projX = new DenseMatrix[Double](nEigs, blockLength)
-                }
-
-                var i = 0
-                while (i < blockLength) {
-                  val (_, ((_, gs), Some(px))) = block(i)
-
-                  if (useDosages)
-                    RegressionUtils.dosages(X(::, i), gs, completeSampleIndexBc.value, missingSamples)
-                  else
-                    X(::, i) := RegressionUtils.hardCalls(gs, n, sampleMaskBc.value) // No special treatment of constant
-
-                  projX(::, i) := px
-
-                  i += 1
-                }
-
-                val annotations = sclr.likelihoodRatioTestBlockLowRank(X, projX, CtC, UtC, Cty, CzC)
-
-                (block, annotations).zipped.map { case ((v, ((va, gs), _)), a) => (v, (inserter(va, a), gs)) }
-              })
+              (v, (inserter(va, annotation), gs))
+            }
           }, preservesPartitioning = true)
         }
 
