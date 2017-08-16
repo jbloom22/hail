@@ -50,7 +50,7 @@ case class KinshipMatrix(hc: HailContext, sampleSignature: Type, matrix: Indexed
   }
   
   def eigen(optNEigs: Option[Int]): Eigendecomposition = {
-    val K = matrix.toLocalMatrix().asBreeze().asInstanceOf[DenseMatrix[Double]]
+    val K = matrix.toLocalMatrix().asBreeze().toDenseMatrix
 
     info(s"Computing eigenvectors of kinship matrix...")
     val eigK = printTime(eigSymD(K))

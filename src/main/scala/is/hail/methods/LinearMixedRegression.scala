@@ -68,10 +68,6 @@ object LinearMixedRegression {
     val (y, cov, completeSamples) = RegressionUtils.getPhenoCovCompleteSamples(vds, yExpr, covExpr)
     val C = cov
     val completeSamplesSet = completeSamples.toSet
-    val sampleMask = vds.sampleIds.map(completeSamplesSet).toArray
-    val completeSampleIndex = (0 until vds.nSamples)
-      .filter(i => completeSamplesSet(vds.sampleIds(i)))
-      .toArray
 
     optDelta.foreach(delta =>
       if (delta <= 0d)
@@ -92,9 +88,13 @@ object LinearMixedRegression {
     }
 
     val Eigendecomposition(_, rowIds, evects, evals) = eigen.filterRows(vds.sSignature, completeSamplesSet)
-
+    
     if (!completeSamples.sameElements(rowIds))
-      fatal("Bad stuff")
+      fatal("Complete samples in the dataset must all be coordinates of the eigenvectors, and in the same order.")
+
+    val nFiltered = rowIds.length - completeSamples.length
+    if (nFiltered > 0)
+      info(s"lmmreg: Filtered $nFiltered coordinates from each eigenvector, as the corresponding samples were not complete samples in the dataset.")
 
     val Ut = evects.t
     val S = evals
@@ -117,6 +117,9 @@ object LinearMixedRegression {
     val vds1 = globalFit(vds, diagLMM, covExpr, nEigs, S, rootGA, useML)
 
     if (runAssoc) {
+      val sampleMask = vds.sampleIds.map(completeSamplesSet).toArray
+      val completeSampleIndex = (0 until vds.nSamples).filter(sampleMask).toArray
+
       val sc = vds1.sparkContext
       val sampleMaskBc = sc.broadcast(sampleMask)
       val completeSampleIndexBc = sc.broadcast(completeSampleIndex)
@@ -445,8 +448,6 @@ case class DiagLMM(
   TyTy: Double,
   useML: Boolean)
 
-trait ScalarLMM
-
 // Handles full-rank case
 class FullRankScalarLMM(
   y: DenseVector[Double],
@@ -455,7 +456,7 @@ class FullRankScalarLMM(
   Qty: DenseVector[Double],
   yQty: Double,
   logNullS2: Double,
-  useML: Boolean) extends ScalarLMM {
+  useML: Boolean) {
 
   val n = y.length
   val invDf = 1.0 / (if (useML) n else n - Qt.rows)
@@ -476,7 +477,7 @@ class FullRankScalarLMM(
 }
 
 // Handles low-rank case, but is slower than ScalarLMM on full-rank case
-case class LowRankScalarLMM(con: LMMConstants, delta: Double, logNullS2: Double, useML: Boolean) extends ScalarLMM {
+case class LowRankScalarLMM(con: LMMConstants, delta: Double, logNullS2: Double, useML: Boolean) {
   val n = con.n
   val Uty = con.Uty
   val Utcov = con.UtC
@@ -511,11 +512,15 @@ case class LowRankScalarLMM(con: LMMConstants, delta: Double, logNullS2: Double,
 
     val CdC = invDelta * CtC + CzC
 
-    val b = CdC \ Cdy
-    val s2 = invDf * (ydy - (Cdy dot b))
-    val chi2 = n * (logNullS2 - math.log(s2))
-    val p = chiSquaredTail(1, chi2)
+    try {
+      val b = CdC \ Cdy
+      val s2 = invDf * (ydy - (Cdy dot b))
+      val chi2 = n * (logNullS2 - math.log(s2))
+      val p = chiSquaredTail(1, chi2)
 
-    Annotation(b(0), s2, chi2, p)
+      Annotation(b(0), s2, chi2, p)
+    } catch {
+      case e: breeze.linalg.MatrixSingularException => null
+    }
   }
 }

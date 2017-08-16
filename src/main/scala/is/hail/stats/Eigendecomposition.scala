@@ -45,6 +45,6 @@ case class Eigendecomposition(rowSignature: Type, rowIds: Array[Annotation], eve
 }
 
 case class EigendecompositionDist(rowSignature: Type, rowIds: Array[Annotation], evects: BlockMatrix, evals: DenseVector[Double]) {
-  require(evects.numRows() == rowIds.length) // FIXME: expensive
-  require(evects.numCols() == evals.length)   
+  require(evects.numRows() == rowIds.length)
+  require(evects.numCols() == evals.length)
 }
