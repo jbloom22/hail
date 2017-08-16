@@ -31,11 +31,13 @@ object TestingOrderedIRM {
     val irm = ToNormalizedIndexedRowMatrix(vds)
     val row1 = irm.rows.take(1)(0)
 
+    println(s"Row 1 = $row1")
+
     val bm = irm.toBlockMatrixDense()
 
     val partitionSizes = vds.rdd.mapPartitions( it => Iterator(it.length), preservesPartitioning = true).collect()
 
-    val boundsPlus2 = partitionSizes.scanLeft(0)(_ + _)
+    val boundsPlus2 = partitionSizes.scanLeft(-1)(_ + _)
     val bounds = boundsPlus2.slice(1, boundsPlus2.length - 1)
 
     val orderedPartitioner = new OrderedPartitioner[Int, Int](bounds, partitionSizes.length)
