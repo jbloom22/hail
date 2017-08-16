@@ -16,6 +16,12 @@ object LinearMixedRegressionDist {
 
   import dm.ops._
 
+  def multiply(bm: BlockMatrix, v: DenseVector[Double]): DenseVector[Double] =
+    DenseVector((bm * v.asDenseMatrix.t.asSpark()).toLocalMatrix().asInstanceOf[SparkDenseMatrix].values)
+
+  def multiply(bm: BlockMatrix, m: DenseMatrix[Double]): DenseMatrix[Double] =
+    (bm * m.asSpark()).toLocalMatrix().asBreeze().asInstanceOf[DenseMatrix[Double]]
+  
   def applyEigenDist(
     vds: VariantDataset,
     eigenDist: EigendecompositionDist,
@@ -37,10 +43,6 @@ object LinearMixedRegressionDist {
     val (y, cov, completeSamples) = RegressionUtils.getPhenoCovCompleteSamples(vds, yExpr, covExpr)
     val C = cov
     val completeSamplesSet = completeSamples.toSet
-    val sampleMask = vds.sampleIds.map(completeSamplesSet).toArray
-    val completeSampleIndex = (0 until vds.nSamples)
-      .filter(i => completeSamplesSet(vds.sampleIds(i)))
-      .toArray
 
     optDelta.foreach(delta =>
       if (delta <= 0d)
@@ -66,9 +68,9 @@ object LinearMixedRegressionDist {
     val EigendecompositionDist(_, rowIds, evects, evals) = eigenDist
 
     if (!completeSamples.sameElements(rowIds))
-      fatal("Bad stuff")
-
-    val Ut = evects.transpose
+      fatal("Complete samples in the dataset must coincide with the coordinates of the eigenvectors, and in the same order.")
+    
+    val Ut = evects.t
     val S = evals
     val nEigs = S.length
 
@@ -76,8 +78,8 @@ object LinearMixedRegressionDist {
     info(s"lmmreg: Evals 1 to ${ math.min(20, nEigs) }: " + ((nEigs - 1) to math.max(0, nEigs - 20) by -1).map(S(_).formatted("%.5f")).mkString(", "))
     info(s"lmmreg: Evals $nEigs to ${ math.max(1, nEigs - 20) }: " + (0 until math.min(nEigs, 20)).map(S(_).formatted("%.5f")).mkString(", "))
 
-    val UtC = Helper.multiply(Ut, C)
-    val Uty = Helper.multiply(Ut, y)
+    val UtC = multiply(Ut, C)
+    val Uty = multiply(Ut, y)
     val CtC = C.t * C
     val Cty = C.t * y
     val yty = y.t * y
@@ -89,6 +91,9 @@ object LinearMixedRegressionDist {
     val vds1 = LinearMixedRegression.globalFit(vds, diagLMM, covExpr, nEigs, S, rootGA, useML)
 
     val vds2 = if (runAssoc) {
+      val sampleMask = vds.sampleIds.map(completeSamplesSet).toArray
+      val completeSampleIndex = (0 until vds.nSamples).filter(sampleMask).toArray
+      
       val sc = vds1.sparkContext
       val sampleMaskBc = sc.broadcast(sampleMask)
       val completeSampleIndexBc = sc.broadcast(completeSampleIndex)
@@ -114,7 +119,7 @@ object LinearMixedRegressionDist {
 
           val scalarLMMBc = sc.broadcast(scalarLMM)
 
-          val projG = (allG.toBlockMatrixDense() * (Ut :* diagLMM.sqrtInvD.toArray).transpose)
+          val projG = (allG.toBlockMatrixDense() * (Ut :* diagLMM.sqrtInvD.toArray).t)
             .toIndexedRowMatrix()
             .rows
             .map { case IndexedRow(i, px) => (variantsBc.value(i.toInt), DenseVector(px.toArray)) }
@@ -123,7 +128,7 @@ object LinearMixedRegressionDist {
           vds1.rdd.orderedLeftJoinDistinct(projG).asOrderedRDD.mapPartitions({ it =>
             val missingSamples = new ArrayBuilder[Int]
 
-            // columns are genotype vectors
+            // columns are projected genotype vectors
             var projX: DenseMatrix[Double] = null
 
             it.grouped(blockSize)
@@ -152,7 +157,7 @@ object LinearMixedRegressionDist {
           val scalarLMM = LowRankScalarLMM(lmmConstants, diagLMM.delta, diagLMM.logNullS2, useML)
           val scalarLMMBc = sc.broadcast(scalarLMM)
 
-          val projG = (allG.toBlockMatrixDense() * Ut.transpose)
+          val projG = (allG.toBlockMatrixDense() * Ut.t) // can we avoid double transpose?
             .toIndexedRowMatrix()
             .rows
             .map { case IndexedRow(i, px) => (variantsBc.value(i.toInt), DenseVector(px.toArray)) }
@@ -201,16 +206,4 @@ object LinearMixedRegressionDist {
 
     vds2
   }
-}
-
-object Helper {
-  val dm = DistributedMatrix[BlockMatrix]
-
-  import dm.ops._
-
-  def multiply(bm: BlockMatrix, v: DenseVector[Double]): DenseVector[Double] =
-    DenseVector((bm * v.asDenseMatrix.t.asSpark()).toLocalMatrix().asInstanceOf[SparkDenseMatrix].values)
-
-  def multiply(bm: BlockMatrix, m: DenseMatrix[Double]): DenseMatrix[Double] =
-    (bm * m.asSpark()).toLocalMatrix().asBreeze().asInstanceOf[DenseMatrix[Double]]
 }
