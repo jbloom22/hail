@@ -7,7 +7,7 @@ import is.hail.HailContext
 import is.hail.annotations.Annotation
 import is.hail.distributedmatrix.BlockMatrixIsDistributedMatrix
 import is.hail.expr.{TString, Type}
-import is.hail.stats.{Eigendecomposition, EigendecompositionDist, eigSymD}
+import is.hail.stats.{Eigen, EigenDistributed, eigSymD}
 import is.hail.utils._
 import org.apache.spark.mllib.linalg.{Vectors => SparkVectors}
 import org.apache.spark.mllib.linalg.distributed.{IndexedRow, IndexedRowMatrix}
@@ -49,7 +49,7 @@ case class KinshipMatrix(hc: HailContext, sampleSignature: Type, matrix: Indexed
     KinshipMatrix(hc, sampleSignature, new IndexedRowMatrix(filteredRowsAndCols), filteredSamplesIds, nVariantsUsed)
   }
   
-  def eigen(optNEigs: Option[Int]): Eigendecomposition = {
+  def eigen(optNEigs: Option[Int]): Eigen = {
     val K = matrix.toLocalMatrix().asBreeze().toDenseMatrix
 
     info(s"Computing eigenvectors of kinship matrix...")
@@ -70,10 +70,10 @@ case class KinshipMatrix(hc: HailContext, sampleSignature: Type, matrix: Indexed
       else
         (eigK.eigenvectors(::, (n - nEigs) until n).copy, eigK.eigenvalues((n - nEigs) until n).copy)
     
-    Eigendecomposition(sampleSignature, sampleIds, evects, evals)
+    Eigen(sampleSignature, sampleIds, evects, evals)
   }
   
-  def eigenDist(optNEigs: Option[Int]): EigendecompositionDist = {
+  def eigenDistributed(optNEigs: Option[Int]): EigenDistributed = {
     val K = matrix.toLocalMatrix().asBreeze().asInstanceOf[DenseMatrix[Double]]
 
     info(s"Computing eigenvectors of kinship matrix...")
@@ -96,7 +96,7 @@ case class KinshipMatrix(hc: HailContext, sampleSignature: Type, matrix: Indexed
       
     val U = BlockMatrixIsDistributedMatrix.from(hc.sc, evects.asSpark(), 1024, 1024)
     
-    EigendecompositionDist(sampleSignature, sampleIds, U, evals)
+    EigenDistributed(sampleSignature, sampleIds, U, evals)
   }
 
   /**
