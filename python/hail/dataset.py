@@ -12,7 +12,7 @@ from hail.representation import Interval, Pedigree, Variant
 from hail.utils import Summary, wrap_to_list, hadoop_read
 from hail.kinshipMatrix import KinshipMatrix
 from hail.ldMatrix import LDMatrix
-from hail.eigendecomposition import Eigendecomposition
+from hail.eigen import Eigen, EigenDistributed
 
 warnings.filterwarnings(module=__name__, action='once')
 
@@ -3313,7 +3313,7 @@ class VariantDataset(object):
     
     @handle_py4j
     @requireTGenotype
-    @typecheck_method(eigen=Eigendecomposition,
+    @typecheck_method(eigen=Eigen,
                       y=strlike,
                       covariates=listof(strlike),
                       global_root=strlike,
