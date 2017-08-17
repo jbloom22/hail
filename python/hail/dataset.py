@@ -3383,6 +3383,29 @@ class VariantDataset(object):
         jvds = self._jvdf.lmmregEigen(eigen._jeigen, y, jarray(Env.jvm().java.lang.String, covariates), use_ml, global_root,
                                       va_root, run_assoc, joption(delta), sparsity_threshold, use_dosages)
         return VariantDataset(self.hc, jvds)
+    
+    @handle_py4j
+    @requireTGenotype
+    @typecheck_method(eigen_distributed=EigenDistributed,
+                      y=strlike,
+                      covariates=listof(strlike),
+                      global_root=strlike,
+                      va_root=strlike,
+                      run_assoc=bool,
+                      use_ml=bool,
+                      delta=nullable(numeric),
+                      sparsity_threshold=numeric,
+                      use_dosages=bool)
+    def lmmreg_eigen_distributed(self, eigen_distributed, y, covariates=[], global_root="global.lmmreg", va_root="va.lmmreg", 
+                     run_assoc=True, use_ml=False, delta=None, sparsity_threshold=1.0, use_dosages=False):
+        """Use a kinship-based linear mixed model to estimate the genetic component of phenotypic variance (narrow-sense heritability) and optionally test each variant for association. This method is more efficient and scalable than :py:meth:`~hail.VariantDataset.lmmreg`.
+
+        .. include:: requireTGenotype.rst
+        """
+        
+        jvds = self._jvdf.lmmregEigenDistributed(eigen_distributed._jeigen, y, jarray(Env.jvm().java.lang.String, covariates), use_ml, global_root,
+                                      va_root, run_assoc, joption(delta), sparsity_threshold, use_dosages)
+        return VariantDataset(self.hc, jvds)
 
     @handle_py4j
     @requireTGenotype

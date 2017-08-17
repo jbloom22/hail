@@ -12,7 +12,7 @@ import is.hail.io.vcf.{BufferedLineIterator, ExportVCF}
 import is.hail.keytable.KeyTable
 import is.hail.methods._
 import is.hail.sparkextras.{OrderedPartitioner, OrderedRDD}
-import is.hail.stats.{ComputeRRM, Eigendecomposition, EigendecompositionDist}
+import is.hail.stats.{ComputeRRM, Eigen, EigenDistributed}
 import is.hail.utils._
 import is.hail.variant.Variant.orderedKey
 import org.apache.hadoop
@@ -592,16 +592,17 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
     rootVA: String = "va.lmmreg",
     runAssoc: Boolean = true,
     delta: Option[Double] = None,
-    sparsityThreshold: Double = 1.0,
+    sparsityThreshold: Double = 1.0, // no longer used
     useDosages: Boolean = false,
-    nEigs: Option[Int] = None): VariantDataset = {
+    nEigs: Option[Int] = None,
+    blockSize: Int = 128): VariantDataset = {
 
     requireSplit("linear mixed regression")
     LinearMixedRegression(vds, kinshipMatrix, y, covariates, useML, rootGA, rootVA,
-      runAssoc, delta, sparsityThreshold, useDosages, nEigs)
+      runAssoc, delta, useDosages, nEigs, blockSize)
   }
   
-  def lmmregEigen(eigen: Eigendecomposition,
+  def lmmregEigen(eigen: Eigen,
     y: String,
     covariates: Array[String] = Array.empty[String],
     useML: Boolean = false,
@@ -609,15 +610,16 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
     rootVA: String = "va.lmmreg",
     runAssoc: Boolean = true,
     delta: Option[Double] = None,
-    sparsityThreshold: Double = 1.0,
-    useDosages: Boolean = false): VariantDataset = {
+    sparsityThreshold: Double = 1.0, // no longer used
+    useDosages: Boolean = false,
+    blockSize: Int = 128): VariantDataset = {
 
     requireSplit("linear mixed regression")
     LinearMixedRegression.applyEigen(vds, eigen, y, covariates, useML, rootGA, rootVA,
-      runAssoc, delta, sparsityThreshold, useDosages)
+      runAssoc, delta, useDosages, blockSize)
   }
   
-  def lmmregEigenDist(eigenDist: EigendecompositionDist,
+  def lmmregEigenDistributed(eigenDist: EigenDistributed,
     y: String,
     covariates: Array[String] = Array.empty[String],
     useML: Boolean = false,
@@ -625,12 +627,13 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
     rootVA: String = "va.lmmreg",
     runAssoc: Boolean = true,
     delta: Option[Double] = None,
-    sparsityThreshold: Double = 1.0,
-    useDosages: Boolean = false): VariantDataset = {
+    sparsityThreshold: Double = 1.0, // no longer used
+    useDosages: Boolean = false,
+    blockSize: Int = 128): VariantDataset = {
 
     requireSplit("linear mixed regression")
-    LinearMixedRegressionDist.applyEigenDist(vds, eigenDist, y, covariates, useML, rootGA, rootVA,
-      runAssoc, delta, sparsityThreshold, useDosages)
+    LinearMixedRegression.applyEigenDistributed(vds, eigenDist, y, covariates, useML, rootGA, rootVA,
+      runAssoc, delta, useDosages, blockSize)
   }
 
   def logreg(test: String,

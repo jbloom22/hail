@@ -2,7 +2,7 @@ from hail.typecheck import *
 
 from hail.java import *
 from hail.expr import Type, TString
-from hail.eigendecomposition import Eigendecomposition
+from hail.eigen import Eigen, EigenDistributed
 
 
 class KinshipMatrix:
@@ -47,26 +47,6 @@ class KinshipMatrix:
         from pyspark.mllib.linalg.distributed import IndexedRowMatrix
 
         return IndexedRowMatrix(self._jkm.matrix())
-
-    @typecheck_method(k=nullable(integral))
-    def eigen(self, k=None):
-        """
-        Compute an eigendecomposition of the kinship matrix. The number of eigenvectors returned is the minimum of
-        the number of variants used to form the kinship matrix, the number of samples, and k (if supplied).
-        
-        .. caution::
-        
-            This method collects the kinship matrix to a local matrix on the driver in order to compute the full
-            eigendecomposition using LAPACK. Only call this method when the kinship matrix is small enough to fit in
-            local memory; the absolute limit on the number of samples is 32k.
-        
-        :param k: Upper bound on the number of eigenvectors to return.
-        :type K: int or None
-        
-        :return: Eigendecomposition of the kinship matrix.
-        :rtype: Eigendecomposition
-        """
-        return Eigendecomposition(self._jkm.eigen(joption(k)))
 
     @typecheck_method(output=strlike)
     def export_tsv(self, output):
@@ -116,3 +96,38 @@ class KinshipMatrix:
         :param str output: File path for output.
         """
         self._jkm.exportIdFile(output)
+
+    @typecheck_method(k=nullable(integral))
+    def eigen(self, k=None):
+        """
+        Compute an eigendecomposition of the kinship matrix. The number of eigenvectors returned is the minimum of
+        the number of variants used to form the kinship matrix, the number of samples, and k (if supplied).
+        
+        .. caution::
+        
+            This method collects the kinship matrix to a local matrix on the driver in order to compute the full
+            eigendecomposition using LAPACK. Only call this method when the kinship matrix is small enough to fit in
+            local memory; the absolute limit on the number of samples is 32k.
+        
+        :param k: Upper bound on the number of eigenvectors to return.
+        :type K: int or None
+        
+        :return: Eigendecomposition of the kinship matrix.
+        :rtype: Eigen
+        """
+        return Eigen(self._jkm.eigen(joption(k)))
+    
+    @typecheck_method(k=nullable(integral))
+    def eigenDistributed(self, k=None):
+        """
+        Compute an eigendecomposition of the kinship matrix, with eigenvectors stored as a distributed matrix.
+        The number of eigenvectors returned is the minimum of the number of variants used to form the kinship matrix,
+        the number of samples, and k (if supplied).
+                
+        :param k: Upper bound on the number of eigenvectors to return.
+        :type K: int or None
+        
+        :return: Eigendecomposition of the kinship matrix.
+        :rtype: EigenDistributed
+        """
+        return EigenDistributed(self._jkm.eigenDistributed(joption(k)))

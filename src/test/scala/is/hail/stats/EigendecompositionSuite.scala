@@ -8,7 +8,7 @@ import org.testng.annotations.Test
 
 class EigendecompositionSuite extends SparkSuite {
 
-  def compareEigen(e1: Eigendecomposition, e2: Eigendecomposition, tolerance: Double = 1e-6) {
+  def compareEigen(e1: Eigen, e2: Eigen, tolerance: Double = 1e-6) {
     assert(e1.rowSignature == e2.rowSignature)
     assert(e1.rowIds sameElements e2.rowIds)
     compareArray(e1.evals.toArray, e2.evals.toArray)
