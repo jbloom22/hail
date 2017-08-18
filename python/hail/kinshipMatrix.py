@@ -118,7 +118,7 @@ class KinshipMatrix:
         return Eigen(self._jkm.eigen(joption(k)))
     
     @typecheck_method(k=nullable(integral))
-    def eigenDistributed(self, k=None):
+    def eigen_distributed(self, k=None):
         """
         Compute an eigendecomposition of the kinship matrix, with eigenvectors stored as a distributed matrix.
         The number of eigenvectors returned is the minimum of the number of variants used to form the kinship matrix,
