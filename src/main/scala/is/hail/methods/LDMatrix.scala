@@ -39,7 +39,7 @@ object LDMatrix {
     info(s"Computing LD matrix with ${variantsKept.length} variants using $nSamples samples. $nVariantsDropped variants were dropped.")
 
     val localBound = 5000 * 5000
-    val nEntries: Long = nVariantsKept * nVariantsKept
+    val nEntries: Long = nVariantsKept * nSamples
     val nSamplesInverse = 1.0 / nSamples
 
     val computeLocally = optComputeLocally.getOrElse(nEntries <= localBound)
