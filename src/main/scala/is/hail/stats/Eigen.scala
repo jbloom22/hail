@@ -44,7 +44,7 @@ case class Eigen(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMat
     val U = BlockMatrixIsDistributedMatrix.from(sc, evects.asSpark(), 1024, 1024)
     EigenDistributed(rowSignature, rowIds, U, evals)
   }
-  
+
 //  private val metadataRelativePath = "/metadata.json"
 //  private val evectsRelativePath = "/evects"
 //  private val evalsRelativePath = "/evals"
