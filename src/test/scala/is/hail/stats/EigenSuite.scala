@@ -2,29 +2,29 @@ package is.hail.stats
 
 import breeze.linalg._
 import breeze.stats.mean
-import is.hail.SparkSuite
+import is.hail.{SparkSuite, TestUtils, stats}
 import is.hail.annotations.Annotation
 import is.hail.expr.TString
-import is.hail.stats
 import org.apache.commons.math3.random.JDKRandomGenerator
 import org.testng.annotations.Test
 
 class EigenSuite extends SparkSuite {
-
-  def compareEigen(e1: Eigen, e2: Eigen, tolerance: Double = 1e-6) {
+  def assertEqual(e1: Eigen, e2: Eigen) {
     assert(e1.rowSignature == e2.rowSignature)
     assert(e1.rowIds sameElements e2.rowIds)
-    compareArray(e1.evals.toArray, e2.evals.toArray)
-    compareArray(e1.evects(::, 1 to -1).toArray, e2.evects(::, 1 to -1).toArray)
+    assert(e1.evects == e2.evects)
+    assert(e1.evals == e2.evals)
   }
   
-  // comparing up to element sign
-  def compareArray(a1: Array[Double], a2: Array[Double], tolerance: Double = 1e-6) {
-    assert((a1, a2).zipped.forall((x, y) => math.abs(x - y) < tolerance || math.abs(x + y) < tolerance))
+  def assertEigenEqualityUpToSign(e1: Eigen, e2: Eigen, r: Range, tolerance: Double = 1e-6) {
+    assert(e1.rowSignature == e2.rowSignature)
+    assert(e1.rowIds sameElements e2.rowIds)
+    assert(math.abs(max(e1.evals - e2.evals)) < 1e-6)
+    r.foreach(j => TestUtils.assertVectorEqualityUpToSignDouble(e1.evects(::, j), e2.evects(::, j), tolerance))
   }
   
   // comparison over non-zero eigenvalues
-  @Test def test() {
+  @Test def compareDirectKinshipAndLDMatrix() {
     def testMatrix(G: DenseMatrix[Int], H: DenseMatrix[Double]) {
       for (i <- 0 until H.cols) {
         H(::, i) -= mean(H(::, i))
@@ -34,25 +34,27 @@ class EigenSuite extends SparkSuite {
       val L = (1.0 / H.rows) * (H.t * H)
 
       val eigen = eigSymD(K)
-      val rank = H.rows min H.cols - 1
+      val rank = (H.rows min H.cols) - 1
       
       val vds = stats.vdsFromGtMatrix(hc)(G)
       val eigenK = vds.rrm().eigen(None)
       val eigenL = vds.ldMatrix().eigenRRM(vds, None)
       
-      compareArray(eigen.eigenvalues(-rank to -1).toArray, eigenK.evals(-rank to -1).toArray)
-      compareArray(eigen.eigenvectors(::, -rank to -1).toArray, eigenK.evects(::, -rank to -1).toArray)
-      compareEigen(eigenK, eigenL)
+      val r = -rank to -1
+      
+      TestUtils.assertVectorEqualityUpToSignDouble(eigen.eigenvalues(r), eigenK.evals(r))
+      r.foreach(j => TestUtils.assertVectorEqualityUpToSignDouble(eigen.eigenvectors(::, j), eigenK.evects(::, j)))
+      assertEigenEqualityUpToSign(eigenK, eigenL, r)
     }
     
     val G = DenseMatrix((0, 1),
                         (2, 1),
                         (0, 2))
-        
+
     val G1 = DenseMatrix((0,  1,  0,  2),
                          (2, -1,  0,  2),
                          (1,  2,  0, -1))
-    
+
     val H1 = DenseMatrix((0.0, 1.0),
                          (2.0, 1.5),
                          (1.0, 2.0))
@@ -71,7 +73,7 @@ class EigenSuite extends SparkSuite {
     testMatrix(G2, convert(G2, Double))
     testMatrix(G3, convert(G3, Double))
   }
-  
+
   @Test def readWriteIdentity() {
     val fname = tmpDir.createTempFile("test")
     
@@ -88,13 +90,8 @@ class EigenSuite extends SparkSuite {
     val svdW = svd(W)
     
     val eigen = Eigen(TString, samplesIds, svdW.leftVectors, svdW.singularValues)
-    
+ 
     eigen.write(hc, fname)
-    val eigen2 = Eigen.read(hc, fname)
-    
-    println(eigen)
-    println(eigen2)
-    
-    assert(eigen == Eigen.read(hc, fname))
+    assertEqual(eigen, Eigen.read(hc, fname))
   }
 }
