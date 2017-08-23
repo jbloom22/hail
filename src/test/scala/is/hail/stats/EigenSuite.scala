@@ -3,10 +3,13 @@ package is.hail.stats
 import breeze.linalg._
 import breeze.stats.mean
 import is.hail.SparkSuite
+import is.hail.annotations.Annotation
+import is.hail.expr.TString
 import is.hail.stats
+import org.apache.commons.math3.random.JDKRandomGenerator
 import org.testng.annotations.Test
 
-class EigendecompositionSuite extends SparkSuite {
+class EigenSuite extends SparkSuite {
 
   def compareEigen(e1: Eigen, e2: Eigen, tolerance: Double = 1e-6) {
     assert(e1.rowSignature == e2.rowSignature)
@@ -67,5 +70,31 @@ class EigendecompositionSuite extends SparkSuite {
     testMatrix(G1, H1)
     testMatrix(G2, convert(G2, Double))
     testMatrix(G3, convert(G3, Double))
+  }
+  
+  @Test def readWriteIdentity() {
+    val fname = tmpDir.createTempFile("test")
+    
+    val seed = 0
+
+    val rand = new JDKRandomGenerator()
+    rand.setSeed(seed)
+
+    val samplesIds: Array[Annotation] = Array("A", "B", "C")
+    val n = 3
+    val m = 10
+    val W = DenseMatrix.fill[Double](n, m)(rand.nextGaussian())
+
+    val svdW = svd(W)
+    
+    val eigen = Eigen(TString, samplesIds, svdW.leftVectors, svdW.singularValues)
+    
+    eigen.write(hc, fname)
+    val eigen2 = Eigen.read(hc, fname)
+    
+    println(eigen)
+    println(eigen2)
+    
+    assert(eigen == Eigen.read(hc, fname))
   }
 }

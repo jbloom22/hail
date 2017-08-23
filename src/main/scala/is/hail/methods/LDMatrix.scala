@@ -74,11 +74,11 @@ object LDMatrix {
     hadoop.mkDir(uri)
 
     val rdd = hc.sc.sequenceFile[LongWritable, ArrayPrimitiveWritable](uri+matrixRelativePath).map { case (lw, apw) =>
-      new IndexedRow(lw.get(), new SparkDenseVector(apw.get().asInstanceOf[Array[Double]]))
+      IndexedRow(lw.get(), new SparkDenseVector(apw.get().asInstanceOf[Array[Double]]))
     }
 
     val LDMatrixMetadata(variants, nSamples) =
-      hc.hadoopConf.readTextFile(uri+metadataRelativePath) { isr =>
+      hadoop.readTextFile(uri+metadataRelativePath) { isr =>
         jackson.Serialization.read[LDMatrixMetadata](isr)
       }
 
