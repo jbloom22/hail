@@ -1,14 +1,11 @@
 package is.hail.stats
 
-import java.io.{DataInput, DataOutput}
-
 import breeze.linalg.{DenseMatrix, DenseVector}
 import is.hail.HailContext
 import is.hail.annotations.Annotation
 import is.hail.distributedmatrix.BlockMatrixIsDistributedMatrix
 import is.hail.expr.{TString, Type}
 import is.hail.utils._
-import org.apache.hadoop.io.Writable
 import org.apache.spark.SparkContext
 import org.apache.spark.mllib.linalg
 import org.apache.spark.mllib.linalg.distributed.BlockMatrix
@@ -115,7 +112,7 @@ object Eigen {
       }
     }
     
-    new Eigen(TString, sampleIds.map(_.asInstanceOf[Annotation]), new DenseMatrix[Double](nSamples, nEigs, evectsData), DenseVector(evalsData))
+    new Eigen(TString, sampleIds.asInstanceOf[Array[Annotation]], new DenseMatrix[Double](nSamples, nEigs, evectsData), DenseVector(evalsData))
   }
 }
 
