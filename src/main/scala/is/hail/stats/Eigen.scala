@@ -1,11 +1,14 @@
 package is.hail.stats
 
+import java.io.{DataInput, DataOutput}
+
 import breeze.linalg.{DenseMatrix, DenseVector}
 import is.hail.HailContext
 import is.hail.annotations.Annotation
 import is.hail.distributedmatrix.BlockMatrixIsDistributedMatrix
-import is.hail.expr.Type
+import is.hail.expr.{TString, Type}
 import is.hail.utils._
+import org.apache.hadoop.io.Writable
 import org.apache.spark.SparkContext
 import org.apache.spark.mllib.linalg
 import org.apache.spark.mllib.linalg.distributed.BlockMatrix
@@ -44,31 +47,79 @@ case class Eigen(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMat
     val U = BlockMatrixIsDistributedMatrix.from(sc, evects.asSpark(), 1024, 1024)
     EigenDistributed(rowSignature, rowIds, U, evals)
   }
+  
+  import Eigen._
+  
+  def write(hc: HailContext, uri: String) {
+    val hadoop = hc.sc.hadoopConfiguration
+    hadoop.mkDir(uri)
 
-//  private val metadataRelativePath = "/metadata.json"
-//  private val evectsRelativePath = "/evects"
-//  private val evalsRelativePath = "/evals"
-//
-//  def write(hc: HailContext, uri: String) {
-//    val hadoop = hc.sc.hadoopConfiguration
-//    hadoop.mkDir(uri)
-//    
-//    hadoop.writeDataFile(uri + matrixRelativePath)
-//    
-//        m.blocks.map { case ((i, j), m) =>
-//      (new PairWriter(i, j), new MatrixWriter(m.numRows, m.numCols, m.toArray)) }
-//      .saveAsSequenceFile(uri+matrixRelativePath)
-//    
-//    hadoop.writeDataFile(uri + metadataRelativePath) { os =>
-//      jackson.Serialization.write(
-//        EigenData(rowIds.length, evals.length, rowIds.asInstanceOf[Array[String]], evects.toArrayShallow, evals.data)
-//          os)
-//    }
-//  }
+    hadoop.writeDataFile(uri + evectsRelativePath) { os =>
+      val evectsData = evects.toArrayShallow
+      var i = 0
+      while (i < evectsData.length) {
+        os.writeDouble(evectsData(i))
+        i += 1
+      }
+    }
+
+    hadoop.writeDataFile(uri + evalsRelativePath) { os =>
+      val evalsData = evals.toArray
+      var i = 0
+      while (i < evalsData.length) {
+        os.writeDouble(evalsData(i))
+        i += 1
+      }
+    }
+    
+    hadoop.writeDataFile(uri + metadataRelativePath) { os =>
+      jackson.Serialization.write(
+        EigenMetadata(rowIds.length, evals.length, rowIds.map(_.toString())),
+          os)
+    }
+  }
 }
 
+object Eigen {
+  private val metadataRelativePath = "/metadata.json"
+  private val evectsRelativePath = "/evects"
+  private val evalsRelativePath = "/evals"
+  
+  def read(hc: HailContext, uri: String): Eigen = {
+    val hadoop = hc.hadoopConf
 
-case class EigenData(nSamples: Int, nEigs: Int, sampleIds: Array[String], evectsData: Array[Double], evalsData: Array[Double])
+    val EigenMetadata(nSamples, nEigs, sampleIds) =
+      hadoop.readTextFile(uri + metadataRelativePath) { isr =>
+        jackson.Serialization.read[EigenMetadata](isr)
+      }
+
+    assert(nSamples == sampleIds.length)
+    
+    val nEntries = nSamples * nEigs
+    val evectsData = Array.ofDim[Double](nEntries)
+    val evalsData = Array.ofDim[Double](nEigs)
+    
+    hadoop.readDataFile(uri + evectsRelativePath) { is =>
+      var i = 0
+      while (i < nEntries) {
+        evectsData(i) = is.readDouble()
+        i += 1
+      }
+    }
+
+    hadoop.readDataFile(uri + evalsRelativePath) { is =>
+      var i = 0
+      while (i < nEigs) {
+        evalsData(i) = is.readDouble()
+        i += 1
+      }
+    }
+    
+    new Eigen(TString, sampleIds.map(_.asInstanceOf[Annotation]), new DenseMatrix[Double](nSamples, nEigs, evectsData), DenseVector(evalsData))
+  }
+}
+
+case class EigenMetadata(nSamples: Int, nEigs: Int, sampleIds: Array[String])
 
 case class EigenDistributed(rowSignature: Type, rowIds: Array[Annotation], evects: BlockMatrix, evals: DenseVector[Double]) {
   require(evects.numRows() == rowIds.length)
