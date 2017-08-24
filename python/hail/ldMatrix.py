@@ -124,10 +124,9 @@ class LDMatrix:
 
         self._jldm.write(path)
         
-    @typecheck_method(path=strlike)
     @staticmethod
     def read(path):
-        """
+        """va
         Reads the LD matrix from a file.
 
         **Examples**

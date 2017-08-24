@@ -1,4 +1,5 @@
 from hail.typecheck import *
+from hail.java import *
 
 class Eigen:
     """
@@ -56,30 +57,61 @@ class Eigen:
         return self._jeigen.nEvects()
     
     @typecheck_method(k=integral)
-    def take_right(self, k):
+    def take_top(self, k):
         """Take the top k eigenvectors and eigenvalues.
         If k is greater than the number present, then the calling eigendecomposition is returned.
 
         :param int k: Number of eigenvectors and eigenvalues to return.
 
         :return: The top k eigenvectors and eigenvalues.
-        :rtype: Eigendecomposition
+        :rtype: Eigen
         """
         
-        return Eigendecomposition(self._jeigen.take_right(k))
+        return Eigen(self._jeigen.takeTop(k))
     
-    def distrubute(self):
+    def distribute(self):
         """Convert to a distributed eigendecomposition.
         
         :return: Distributed eigendecomposition.
-        :rtype: EigendecompositionDist
+        :rtype: EigenDistributed
         """
         
-        return EigenDistributed(self._jeigen.distribute())
+        return EigenDistributed(self._jeigen.distribute(Env.hc()._jsc))
+    
+    @typecheck_method(path=strlike)
+    def write(self, path):
+        """
+        Writes the eigendecomposition to a file.
+
+        **Examples**
+
+        >>> vds.rrm().eigen().write('output/example.eig')
+
+        :param str path: the path to which to write the eigendecomposition
+        """
+
+        self._jeigen.write(Env.hc()._jhc, path)
+        
+    @staticmethod
+    def read(path):
+        """
+        Reads the eigendecomposition from a file.
+
+        **Examples**
+
+        >>>  eigen = Eigen.read('data/example.eig')
+
+        :param str path: the path from which to read the LD matrix
+        
+        :rtype Eigen
+        """
+
+        jeigen = Env.hail().stats.Eigen.read(Env.hc()._jhc, path)
+        return Eigen(jeigen)
 
 class EigenDistributed:
     """
-    Represents the eigenvectors and eigenvalues of a matrix. The eigenvectors are stored as a distributed matrix.
+    Represents the eigenvectors and eigenvalues of a matrix. Eigenvectors are stored as columns of a distributed matrix.
     """
     def __init__(self, jeigen):
         self._jeigen = jeigen
