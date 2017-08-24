@@ -6,6 +6,7 @@ from hail.expr import *
 from hail.keytable import KeyTable
 from hail.kinshipMatrix import KinshipMatrix
 from hail.ldMatrix import LDMatrix
+from hail.eigen import Eigen, EigenDistributed
 from hail.utils import hadoop_read, hadoop_write, hadoop_copy
 
 __all__ = ['HailContext',
@@ -40,6 +41,8 @@ __all__ = ['HailContext',
            'hadoop_read',
            'hadoop_write',
            'hadoop_copy',
+           'Eigen',
+           'EigenDistributed',
            'KinshipMatrix',
            'LDMatrix',
            'representation',

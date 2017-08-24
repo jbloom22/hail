@@ -26,7 +26,7 @@ case class Eigen(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMat
     Eigen(rowSignature, newRowIds, newEvects, evals)
   }
   
-  def takeRight(k: Int): Eigen = {
+  def takeTop(k: Int): Eigen = {
     if (k < 1)
       fatal(s"k must be a positive integer, got $k")
     else if (k >= nEvects)
@@ -48,6 +48,9 @@ case class Eigen(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMat
   import Eigen._
   
   def write(hc: HailContext, uri: String) {
+    if (rowSignature != TString)
+      fatal(s"In order to write, rows must have schema TString, got $rowSignature") // FIXME
+    
     val hadoop = hc.sc.hadoopConfiguration
     hadoop.mkDir(uri)
 

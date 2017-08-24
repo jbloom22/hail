@@ -69,6 +69,7 @@ object LDMatrix {
 
   private val metadataRelativePath = "/metadata.json"
   private val matrixRelativePath = "/matrix"
+  
   def read(hc: HailContext, uri: String): LDMatrix = {
     val hadoop = hc.hadoopConf
     hadoop.mkDir(uri)
