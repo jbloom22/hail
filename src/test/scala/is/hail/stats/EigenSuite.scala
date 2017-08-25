@@ -38,7 +38,8 @@ class EigenSuite extends SparkSuite {
       
       val vds = stats.vdsFromGtMatrix(hc)(G)
       val eigenK = vds.rrm().eigen(None)
-      val eigenL = vds.ldMatrix().eigenRRM(vds, None)
+      val ldMatrix = vds.ldMatrix()
+      val eigenL = ldMatrix.eigen(None).toEigenDistributedRRM(vds, ldMatrix.nSamplesUsed).localize()
       
       val r = -rank to -1
       
@@ -88,7 +89,6 @@ class EigenSuite extends SparkSuite {
     val W = DenseMatrix.fill[Double](n, m)(rand.nextGaussian())
 
     val svdW = svd(W)
-    
     val eigen = Eigen(TString, samplesIds, svdW.leftVectors, svdW.singularValues)
  
     eigen.write(hc, fname)

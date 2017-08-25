@@ -50,34 +50,10 @@ case class KinshipMatrix(hc: HailContext, sampleSignature: Type, matrix: Indexed
   }
   
   def eigen(optNEigs: Option[Int]): Eigen = {
-    val K = matrix.toLocalMatrix().asBreeze().toDenseMatrix
-
-    info(s"Computing eigenvectors of kinship matrix...")
-    val eigK = printTime(eigSymD(K))
-
-    val maxRank = sampleIds.length min nVariantsUsed.toInt
-    val nEigs = optNEigs.getOrElse(maxRank)
-    optNEigs.foreach( k => if (k > nEigs) info(s"Requested $k evects but maximum rank is $maxRank."))
-    
-    info(s"Eigendecomposition complete, returning $nEigs eigenvectors.")
-
-    val n = K.cols
-    assert(n == eigK.eigenvectors.cols)
-    
-    val (evects, evals) =
-      if (nEigs == n)
-        (eigK.eigenvectors, eigK.eigenvalues)
-      else
-        (eigK.eigenvectors(::, (n - nEigs) until n).copy, eigK.eigenvalues((n - nEigs) until n).copy)
-    
-    Eigen(sampleSignature, sampleIds, evects, evals)
-  }
-  
-  def eigenDistributed(optNEigs: Option[Int]): EigenDistributed = {
     val K = matrix.toLocalMatrix().asBreeze().asInstanceOf[DenseMatrix[Double]]
 
     info(s"Computing eigenvectors of kinship matrix...")
-    val eigK = printTime(eigSymD(K))
+    val eig = printTime(eigSymD(K))
 
     val maxRank = sampleIds.length min nVariantsUsed.toInt
     val nEigs = optNEigs.getOrElse(maxRank)
@@ -86,17 +62,15 @@ case class KinshipMatrix(hc: HailContext, sampleSignature: Type, matrix: Indexed
     info(s"Eigendecomposition complete, returning $nEigs eigenvectors.")
 
     val n = K.cols
-    assert(n == eigK.eigenvectors.cols)
+    assert(n == eig.eigenvectors.cols)
     
     val (evects, evals) =
       if (nEigs == n)
-        (eigK.eigenvectors, eigK.eigenvalues)
-        else
-        (eigK.eigenvectors(::, (n - nEigs) until n), eigK.eigenvalues((n - nEigs) until n))
-      
-    val U = BlockMatrixIsDistributedMatrix.from(hc.sc, evects.asSpark(), 1024, 1024)
+        (eig.eigenvectors, eig.eigenvalues)
+      else
+        (eig.eigenvectors(::, (n - nEigs) until n).copy, eig.eigenvalues((n - nEigs) until n).copy)
     
-    EigenDistributed(sampleSignature, sampleIds, U, evals)
+    Eigen(sampleSignature, sampleIds, evects, evals)
   }
 
   /**
