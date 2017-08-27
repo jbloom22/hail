@@ -627,11 +627,12 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
     runAssoc: Boolean = true,
     delta: Option[Double] = None,
     useDosages: Boolean = false,
+    pathToProjection: Option[String] = None,
     blockSize: Int = 128): VariantDataset = {
 
     requireSplit("linear mixed regression")
     LinearMixedRegression.applyEigenDistributed(vds, eigenDist, y, covariates, useML, rootGA, rootVA,
-      runAssoc, delta, useDosages, blockSize)
+      runAssoc, delta, useDosages, pathToProjection: Option[String], blockSize)
   }
 
   def logreg(test: String,

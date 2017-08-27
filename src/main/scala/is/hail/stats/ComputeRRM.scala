@@ -80,16 +80,15 @@ object ToNormalizedRowMatrix {
 }
 
 object ToIndexedRowMatrix {
-  def apply(vds: VariantDataset, useDosage: Boolean, sampleMask: Array[Boolean], completeSampleIndex: Array[Int]): (Array[Variant], IndexedRowMatrix) = {
+  def apply(vds: VariantDataset, useDosage: Boolean, sampleMask: Array[Boolean], completeSampleIndex: Array[Int]): IndexedRowMatrix = {
     require(vds.wasSplit)
     val n = vds.nSamples
-    val variants = vds.variants.collect()
     val indexedRows = 
       if (!useDosage)
         vds.rdd.zipWithIndex().map { case ((_, (_, gs)), i) => IndexedRow(i, Vectors.dense(RegressionUtils.hardCalls(gs, n, sampleMask).toArray)) } // FIXME: handle sparse?
       else
         vds.rdd.zipWithIndex().map { case ((_, (_, gs)), i) => IndexedRow(i, Vectors.dense(RegressionUtils.dosages(gs, completeSampleIndex).toArray)) }
-    (variants, new IndexedRowMatrix(indexedRows, variants.size, n))
+    new IndexedRowMatrix(indexedRows, vds.countVariants(), n)
   }
 }
 

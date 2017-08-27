@@ -438,66 +438,7 @@ class LinearMixedRegressionSuite extends SparkSuite {
     vdsAssoc.count()
   }
 
-  //Tests that k eigenvectors give the same result as all n eigenvectors for a rank-k kinship matrix on n samples.
-  @Test def testFullRankAndLowRank() {
-    val vdsChr1: VariantDataset = vdsFastLMM.filterVariantsExpr("""v.contig == "1"""")
-
-    //This has 242 variants.
-    val notChr1VDSDownsampled = vdsFastLMM.filterVariantsExpr("""v.contig == "3" && v.start < 2242""")
-    val rrm = notChr1VDSDownsampled.rrm()
-
-    //REML TESTS
-    val vdsChr1FullRankREML = vdsChr1.lmmreg(rrm, "sa.pheno", Array("sa.cov"), delta = None)
-    val vdsChr1LowRankREML = vdsChr1.lmmreg(rrm, "sa.pheno", Array("sa.cov"), nEigs = Some(242))
-
-    globalLMMCompare(vdsChr1FullRankREML, vdsChr1LowRankREML)
-    variantAnnotationLMMCompare(vdsChr1FullRankREML, vdsChr1LowRankREML)
-
-    //ML TESTS
-    val vdsChr1FullRankML = vdsChr1.lmmreg(rrm, "sa.pheno", Array("sa.cov"), useML = true, delta = None)
-    val vdsChr1LowRankML = vdsChr1.lmmreg(rrm, "sa.pheno", Array("sa.cov"), useML = true, nEigs = Some(242))
-
-    globalLMMCompare(vdsChr1FullRankML, vdsChr1LowRankML)
-    variantAnnotationLMMCompare(vdsChr1FullRankML, vdsChr1LowRankML)
-  }
-
-  @Test def testLDandRRMLOCO() {
-    val vdsChr1 = vdsFastLMM.filterVariantsExpr("""v.contig == "1"""")
-    val vdsChr3 = vdsFastLMM.filterVariantsExpr("""v.contig == "3"""")
-    
-    val kinshipMatrix = vdsChr3.rrm()
-    val ldMatrix = vdsChr3.ldMatrix()
-
-    val vdsRRM = vdsChr1.lmmregEigen(kinshipMatrix.eigen(), "sa.pheno", Array("sa.cov"))
-    val vdsLD = vdsChr1.lmmregEigen(ldMatrix.eigen().toEigenDistributedRRM(vdsChr3, ldMatrix.nSamplesUsed).localize(), "sa.pheno", Array("sa.cov"))
-    val vdsRRMDist = vdsChr1.lmmregEigenDistributed(kinshipMatrix.eigen().distribute(hc.sc), "sa.pheno", Array("sa.cov"))
-    val vdsLDDist = vdsChr1.lmmregEigenDistributed(ldMatrix.eigen().toEigenDistributedRRM(vdsChr3, ldMatrix.nSamplesUsed), "sa.pheno", Array("sa.cov"))
-    
-    assert(vdsLD.countVariants() == vdsChr1.countVariants())
-
-    globalLMMCompare(vdsRRM, vdsLD)
-    globalLMMCompare(vdsRRM, vdsRRMDist)
-    globalLMMCompare(vdsRRM, vdsLDDist)
-    
-    variantAnnotationLMMCompare(vdsRRM, vdsLD)
-    variantAnnotationLMMCompare(vdsRRM, vdsRRMDist)
-    variantAnnotationLMMCompare(vdsRRM, vdsLDDist)
-  }
-
-  @Test def testLDAndRRMAreEquivalent() {
-    val vdsFastLMMDownsampled = vdsFastLMM.sampleVariants(0.5)
-    val rrm = vdsFastLMMDownsampled.rrm()
-    val ldMatrix = vdsFastLMMDownsampled.ldMatrix()
-    val eigenFromLD = ldMatrix.eigen().takeTop(230).toEigenDistributedRRM(vdsFastLMMDownsampled, ldMatrix.nSamplesUsed)
-
-    val vdsLD230 = vdsFastLMMDownsampled.lmmregEigenDistributed(eigenFromLD, "sa.pheno", Array("sa.cov"), delta = None)
-    val vdsRRM230 = vdsFastLMMDownsampled.lmmreg(rrm, "sa.pheno", Array("sa.cov"), delta = None, nEigs = Some(230))
-
-    globalLMMCompare(vdsLD230, vdsRRM230)
-    variantAnnotationLMMCompare(vdsLD230, vdsRRM230)
-  }
-
-  private def globalLMMCompare(vds1: VariantDataset, vds2: VariantDataset) {
+  private def compareGlobalLMM(vds1: VariantDataset, vds2: VariantDataset) {
     assert(D_==(vds1.queryGlobal("global.lmmreg.beta")._2.asInstanceOf[Map[String, Double]].apply("intercept"),
       vds2.queryGlobal("global.lmmreg.beta")._2.asInstanceOf[Map[String, Double]].apply("intercept")))
 
@@ -508,7 +449,7 @@ class LinearMixedRegressionSuite extends SparkSuite {
       vds2.queryGlobal("global.lmmreg.h2")._2.asInstanceOf[Double]))
   }
 
-  def variantAnnotationLMMCompare(vds1: VariantDataset, vds2: VariantDataset) {
+  def compareVariantAnnotationLMM(vds1: VariantDataset, vds2: VariantDataset) {
     val vds1Annotations = vds1.variantsAndAnnotations.collect().map(_._2)
     val vds2Annotations = vds2.variantsAndAnnotations.collect().map(_._2)
 
@@ -524,6 +465,66 @@ class LinearMixedRegressionSuite extends SparkSuite {
       TestUtils.assertDouble(qBeta1(vds1Annotations(j)).asInstanceOf[Double], qBeta2(vds2Annotations(j)).asInstanceOf[Double], 1e-2)
       TestUtils.assertDouble(qSg21(vds1Annotations(j)).asInstanceOf[Double], qSg22(vds2Annotations(j)).asInstanceOf[Double], 1e-2 )
     }
+  }
+
+  
+  //Tests that k eigenvectors give the same result as all n eigenvectors for a rank-k kinship matrix on n samples.
+  @Test def testFullRankAndLowRank() {
+    val vdsChr1: VariantDataset = vdsFastLMM.filterVariantsExpr("""v.contig == "1"""")
+
+    //This has 242 variants.
+    val notChr1VDSDownsampled = vdsFastLMM.filterVariantsExpr("""v.contig == "3" && v.start < 2242""")
+    val rrm = notChr1VDSDownsampled.rrm()
+
+    //REML TESTS
+    val vdsChr1FullRankREML = vdsChr1.lmmreg(rrm, "sa.pheno", Array("sa.cov"), delta = None)
+    val vdsChr1LowRankREML = vdsChr1.lmmreg(rrm, "sa.pheno", Array("sa.cov"), nEigs = Some(242))
+
+    compareGlobalLMM(vdsChr1FullRankREML, vdsChr1LowRankREML)
+    compareVariantAnnotationLMM(vdsChr1FullRankREML, vdsChr1LowRankREML)
+
+    //ML TESTS
+    val vdsChr1FullRankML = vdsChr1.lmmreg(rrm, "sa.pheno", Array("sa.cov"), useML = true, delta = None)
+    val vdsChr1LowRankML = vdsChr1.lmmreg(rrm, "sa.pheno", Array("sa.cov"), useML = true, nEigs = Some(242))
+
+    compareGlobalLMM(vdsChr1FullRankML, vdsChr1LowRankML)
+    compareVariantAnnotationLMM(vdsChr1FullRankML, vdsChr1LowRankML)
+  }
+  
+  @Test def testLDandRRMLOCO() {
+    val vdsChr1 = vdsFastLMM.filterVariantsExpr("""v.contig == "1"""")
+    val vdsChr3 = vdsFastLMM.filterVariantsExpr("""v.contig == "3"""")
+    
+    val kinshipMatrix = vdsChr3.rrm()
+    val ldMatrix = vdsChr3.ldMatrix()
+
+    val vdsRRM = vdsChr1.lmmregEigen(kinshipMatrix.eigen(), "sa.pheno", Array("sa.cov"))
+    val vdsLD = vdsChr1.lmmregEigen(ldMatrix.eigen().toEigenDistributedRRM(vdsChr3, ldMatrix.nSamplesUsed).localize(), "sa.pheno", Array("sa.cov"))
+    val vdsRRMDist = vdsChr1.lmmregEigenDistributed(kinshipMatrix.eigen().distribute(hc.sc), "sa.pheno", Array("sa.cov"))
+    val vdsLDDist = vdsChr1.lmmregEigenDistributed(ldMatrix.eigen().toEigenDistributedRRM(vdsChr3, ldMatrix.nSamplesUsed), "sa.pheno", Array("sa.cov"))
+    
+    assert(vdsLD.countVariants() == vdsChr1.countVariants())
+
+    compareGlobalLMM(vdsRRM, vdsLD)
+    compareGlobalLMM(vdsRRM, vdsRRMDist)
+    compareGlobalLMM(vdsRRM, vdsLDDist)
+    
+    compareVariantAnnotationLMM(vdsRRM, vdsLD)
+    compareVariantAnnotationLMM(vdsRRM, vdsRRMDist)
+    compareVariantAnnotationLMM(vdsRRM, vdsLDDist)
+  }
+
+  @Test def testLDAndRRMAreEquivalent() {
+    val vdsFastLMMDownsampled = vdsFastLMM.sampleVariants(0.5)
+    val rrm = vdsFastLMMDownsampled.rrm()
+    val ldMatrix = vdsFastLMMDownsampled.ldMatrix()
+    val eigenFromLD = ldMatrix.eigen().takeTop(230).toEigenDistributedRRM(vdsFastLMMDownsampled, ldMatrix.nSamplesUsed)
+
+    val vdsLD230 = vdsFastLMMDownsampled.lmmregEigenDistributed(eigenFromLD, "sa.pheno", Array("sa.cov"), delta = None)
+    val vdsRRM230 = vdsFastLMMDownsampled.lmmreg(rrm, "sa.pheno", Array("sa.cov"), delta = None, nEigs = Some(230))
+
+    compareGlobalLMM(vdsLD230, vdsRRM230)
+    compareVariantAnnotationLMM(vdsLD230, vdsRRM230)
   }
   
   @Test def testSmall() {
@@ -557,10 +558,10 @@ class LinearMixedRegressionSuite extends SparkSuite {
     val lmmregKinshipDist = vdsSmall.lmmregEigenDistributed(kinshipMatrix.eigen().takeTop(3).distribute(hc.sc), "sa.pheno")
     val lmmregLDDist = vdsSmall.lmmregEigenDistributed(ldMatrix.eigen().takeTop(3).toEigenDistributedRRM(vdsSmall, ldMatrix.nSamplesUsed), "sa.pheno")
 
-    globalLMMCompare(lmmreg, lmmregKinship)
-    globalLMMCompare(lmmreg, lmmregEig)
-    globalLMMCompare(lmmreg, lmmregKinshipDist)
-    globalLMMCompare(lmmreg, lmmregLDDist)
+    compareGlobalLMM(lmmreg, lmmregKinship)
+    compareGlobalLMM(lmmreg, lmmregEig)
+    compareGlobalLMM(lmmreg, lmmregKinshipDist)
+    compareGlobalLMM(lmmreg, lmmregLDDist)
     
     assert(lmmregKinship.queryGlobal("global.lmmreg.nEigs")._2.asInstanceOf[Int] == 3)
     
@@ -569,10 +570,39 @@ class LinearMixedRegressionSuite extends SparkSuite {
     val lmmregKinshipDist1 = vdsSmall.lmmregEigenDistributed(kinshipMatrix.eigen().takeTop(1).distribute(hc.sc), "sa.pheno")
     val lmmregLDDist1 = vdsSmall.lmmregEigenDistributed(ldMatrix.eigen().takeTop(1).toEigenDistributedRRM(vdsSmall, ldMatrix.nSamplesUsed), "sa.pheno")
 
-    globalLMMCompare(lmmregKinship1, lmmregEig1)
-    globalLMMCompare(lmmregKinship1, lmmregKinshipDist1)
-    globalLMMCompare(lmmregKinship1, lmmregLDDist1)
+    compareGlobalLMM(lmmregKinship1, lmmregEig1)
+    compareGlobalLMM(lmmregKinship1, lmmregKinshipDist1)
+    compareGlobalLMM(lmmregKinship1, lmmregLDDist1)
     
     assert(lmmregKinship1.queryGlobal("global.lmmreg.nEigs")._2.asInstanceOf[Int] == 1)
+  }
+  
+  @Test def testProjection() {
+    val vdsFastLMMDownsampled = vdsFastLMM.sampleVariants(0.5)
+    val rrm = vdsFastLMMDownsampled.rrm()
+    val ld = vdsFastLMMDownsampled.ldMatrix()
+    
+    val eigenFromRRM = rrm.eigen().takeTop(230).distribute(sc)
+    val eigenFromLD = ld.eigen().takeTop(230).toEigenDistributedRRM(vdsFastLMMDownsampled, ld.nSamplesUsed)
+
+    
+    val fileRRM = tmpDir.createTempFile("testRRM", extension = ".proj")
+    val fileLD = tmpDir.createTempFile("testLD", extension = ".proj")
+    
+    LinearMixedRegression.writeProjection(fileLD, vdsFastLMMDownsampled, eigenFromLD, "sa.pheno",  Array("sa.cov"), useDosages = false)
+    LinearMixedRegression.writeProjection(fileRRM, vdsFastLMMDownsampled, eigenFromRRM, "sa.pheno",  Array("sa.cov"), useDosages = false)
+    
+    val vdsLD230 = vdsFastLMMDownsampled.lmmregEigenDistributed(eigenFromLD, "sa.pheno", Array("sa.cov"), delta = None)
+    val vdsRRM230 = vdsFastLMMDownsampled.lmmregEigenDistributed(eigenFromRRM, "sa.pheno", Array("sa.cov"), delta = None)
+    val vdsLD230Read = vdsFastLMMDownsampled.lmmregEigenDistributed(eigenFromLD, "sa.pheno", Array("sa.cov"), delta = None, pathToProjection = Some(fileLD))
+    val vdsRRM230Read = vdsFastLMMDownsampled.lmmregEigenDistributed(eigenFromRRM, "sa.pheno", Array("sa.cov"), delta = None, pathToProjection = Some(fileRRM))
+
+    compareGlobalLMM(vdsLD230, vdsRRM230)
+    compareGlobalLMM(vdsLD230, vdsLD230Read)
+    compareGlobalLMM(vdsLD230, vdsRRM230Read)
+
+    compareVariantAnnotationLMM(vdsLD230, vdsRRM230)
+    compareVariantAnnotationLMM(vdsLD230, vdsLD230Read)
+    compareVariantAnnotationLMM(vdsLD230, vdsRRM230Read)
   }
 }

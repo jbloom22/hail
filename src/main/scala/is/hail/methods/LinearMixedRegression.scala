@@ -258,7 +258,6 @@ object LinearMixedRegression {
   }
   
   val dm = DistributedMatrix[BlockMatrix]
-
   import dm.ops._
 
   def multiply(bm: BlockMatrix, v: DenseVector[Double]): DenseVector[Double] =
@@ -266,6 +265,23 @@ object LinearMixedRegression {
 
   def multiply(bm: BlockMatrix, m: DenseMatrix[Double]): DenseMatrix[Double] =
     (bm * m.asSpark()).toLocalMatrix().asBreeze().asInstanceOf[DenseMatrix[Double]]
+  
+  def writeProjection(path: String, vds: VariantDataset, eigenDist: EigenDistributed, yExpr: String, covExpr: Array[String], useDosages: Boolean) {
+    val (_, _, completeSamples) = RegressionUtils.getPhenoCovCompleteSamples(vds, yExpr, covExpr)
+    val completeSamplesSet = completeSamples.toSet
+    val sampleMask = vds.sampleIds.map(completeSamplesSet).toArray
+    val completeSampleIndex = (0 until vds.nSamples).filter(sampleMask).toArray
+
+    val EigenDistributed(_, rowIds, evects, evals) = eigenDist
+
+    if (!completeSamples.sameElements(rowIds))
+      fatal("Complete samples in the dataset must coincide with rows IDs of eigenvectors, in the same order.")
+    
+    val G = ToIndexedRowMatrix(vds, useDosages, sampleMask, completeSampleIndex)
+    val projG = G.toBlockMatrixDense() * evects
+    
+    dm.write(projG, path)
+  }
   
   def applyEigenDistributed(
     vds: VariantDataset,
@@ -278,6 +294,7 @@ object LinearMixedRegression {
     runAssoc: Boolean,
     optDelta: Option[Double],
     useDosages: Boolean,
+    pathToProjection: Option[String],
     blockSize: Int): VariantDataset = {
 
     require(vds.wasSplit)
@@ -309,11 +326,10 @@ object LinearMixedRegression {
       case None => info(s"lmmreg: Estimating delta using ${ if (useML) "ML" else "REML" }... ")
     }
 
-    // FIXME: need filtering on eigenDist
     val EigenDistributed(_, rowIds, evects, evals) = eigenDist
 
     if (!completeSamples.sameElements(rowIds))
-      fatal("Complete samples in the dataset must coincide with the coordinates of the eigenvectors, and in the same order.")
+      fatal("Complete samples in the dataset must coincide with rows IDs of eigenvectors, in the same order.")
     
     val Ut = evects.t
     val S = evals
@@ -336,7 +352,7 @@ object LinearMixedRegression {
     val vds1 = LinearMixedRegression.globalFit(vds, diagLMM, covExpr, nEigs, S, rootGA, useML)
 
     val vds2 = if (runAssoc) {
-      val sampleMask = vds.sampleIds.map(completeSamplesSet).toArray
+      val sampleMask = vds.sampleIds.map(completeSamplesSet).toArray // FIXME
       val completeSampleIndex = (0 until vds.nSamples).filter(sampleMask).toArray
       
       val sc = vds1.sparkContext
@@ -348,9 +364,6 @@ object LinearMixedRegression {
       info(s"lmmreg: Computing statistics for each variant...")
 
       vds1.persist()
-
-      val (variants, allG) = ToIndexedRowMatrix(vds1, useDosages, sampleMask, completeSampleIndex)
-      val variantsBc = sc.broadcast(variants)
       
       def makeIntOrderedPartitioner(vds: VariantDataset): OrderedPartitioner[Int, Int] = {
         val partitionSizes = vds.rdd.mapPartitions( it => Iterator(it.length), preservesPartitioning = true).collect()
@@ -372,6 +385,8 @@ object LinearMixedRegression {
       val variantOrderedPartitioner = vds1.rdd.orderedPartitioner
       
       val useFullRank = nEigs == n
+      val variants = vds1.variants.collect()
+      val variantsBc = sc.broadcast(variants) // can we avoid by zipping with index?
       
       val newRDD =
         if (useFullRank) {
@@ -379,10 +394,11 @@ object LinearMixedRegression {
           val QtTy = Qt * diagLMM.Ty
           val TyQtTy = (diagLMM.Ty dot diagLMM.Ty) - (QtTy dot QtTy)
           val scalarLMM = new FullRankScalarLMM(diagLMM.Ty, diagLMM.TyTy, Qt, QtTy, TyQtTy, diagLMM.logNullS2, useML)
-
           val scalarLMMBc = sc.broadcast(scalarLMM)
 
-          val projG = (allG.toBlockMatrixDense() * (Ut :* diagLMM.sqrtInvD.toArray).t)
+          val G = ToIndexedRowMatrix(vds1, useDosages, sampleMask, completeSampleIndex)
+          
+          val projG = (G.toBlockMatrixDense() * (Ut :* diagLMM.sqrtInvD.toArray).t)
             .toIndexedRowMatrixOrderedPartitioner(intOrderedPartitioner)
             .rows
             .map { case IndexedRow(i, px) => (variantsBc.value(i.toInt), DenseVector(px.toArray)) }
@@ -421,12 +437,24 @@ object LinearMixedRegression {
           val scalarLMM = LowRankScalarLMM(lmmConstants, diagLMM.delta, diagLMM.logNullS2, useML)
           val scalarLMMBc = sc.broadcast(scalarLMM)
 
-          val projG = (allG.toBlockMatrixDense() * Ut.t) // can we avoid double transpose?
+          val projG = pathToProjection match {
+            case Some(path) => dm.read(vds1.hc, path)
+            case None =>
+              val G = ToIndexedRowMatrix(vds1, useDosages, sampleMask, completeSampleIndex)
+              G.toBlockMatrixDense() * Ut.t
+          }
+          
+          if (projG.numRows() != variants.length)
+            fatal(s"Dimension mismatch: projection matches ${projG.numRows()} variants, but there are ${variants.length} variants.")
+          if (projG.numCols() != eigenDist.nEvects)
+            fatal(s"Dimension mismatch: projection matches ${projG.numCols()} eigenvectors, but there are ${eigenDist.nEvects} eigenvectors.")
+           
+          val projG1 = projG
             .toIndexedRowMatrixOrderedPartitioner(intOrderedPartitioner)
             .rows
             .map { case IndexedRow(i, px) => (variantsBc.value(i.toInt), DenseVector(px.toArray)) }
 
-          val projG2 = OrderedRDD(projG, variantOrderedPartitioner)
+          val projG2 = OrderedRDD(projG1, variantOrderedPartitioner)
           
           vds1.rdd.orderedLeftJoinDistinct(projG2).asOrderedRDD.mapPartitions({ it =>
             val sclr = scalarLMMBc.value
