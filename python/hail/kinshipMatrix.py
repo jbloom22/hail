@@ -31,8 +31,7 @@ class KinshipMatrix:
         """
         Gets the list of samples. The (i, j) entry of the matrix encodes the relatedness of the ith and jth samples.
 
-        :return: List of samples.
-        :rtype: list of str
+        :return: List of samples of type key_schema
         """
         return [self.key_schema._convert_to_py(s) for s in self._jkm.sampleIds()]
 
@@ -108,7 +107,7 @@ class KinshipMatrix:
             local memory; the absolute limit on the number of samples is 32k.
         
         :return: Eigendecomposition of the kinship matrix.
-        :rtype: Eigen
+        :rtype: :py:class:`.Eigen`
         """
         return Eigen(self._jkm.eigen())
     

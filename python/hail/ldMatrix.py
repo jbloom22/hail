@@ -58,11 +58,9 @@ class LDMatrix:
     @typecheck_method(path=strlike)
     def write(self, path):
         """
-        Writes the LD matrix to a file.
+        Writes the LD matrix to a path.
 
         **Examples**
-
-        Write an LD matrix to a file.
 
         >>> vds.ld_matrix().write('output/ld_matrix')
 
@@ -74,12 +72,10 @@ class LDMatrix:
         
     @staticmethod
     def read(path):
-        """va
-        Reads the LD matrix from a file.
+        """
+        Reads the LD matrix from a path.
 
         **Examples**
-
-        Read an LD matrix from a file.
 
         >>> ld_matrix = LDMatrix.read('data/ld_matrix')
 
@@ -102,6 +98,6 @@ class LDMatrix:
             local memory; the absolute limit on the number of variants is 32k.
         
         :return: Eigendecomposition of the LD matrix.
-        :rtype: Eigen
+        :rtype: :py:class:`.Eigen`
         """
         return Eigen(self._jldm.eigen())

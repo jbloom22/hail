@@ -1,5 +1,6 @@
 from hail.typecheck import *
 from hail.java import *
+from hail.expr import Type
 
 class Eigen:
     """
@@ -20,11 +21,10 @@ class Eigen:
             self._key_schema = Type._from_java(self._jeigen.rowSignature())
         return self._key_schema
     
-    def sample_list(self):
-        """Gets the list of samples.
+    def row_ids(self):
+        """Gets the list of row IDs.
 
-        :return: List of samples.
-        :rtype: list of str
+        :return: List of row IDs of type key_schema
         """
         return [self.key_schema._convert_to_py(s) for s in self._jeigen.rowIds()]
 
@@ -81,26 +81,50 @@ class Eigen:
     @typecheck_method(vds=anytype,
                       num_samples_in_ld_matrix=integral)
     def to_eigen_distributed_rrm(self, vds, num_samples_in_ld_matrix):
-        """
-        Compute an eigendecomposition of the realized relationship matrix (RRM) of the variant dataset from an
-        eigendecomposition of an LD matrix.
+        """Compute eigendecomposition of the RRM from eigendecomposition of LD matrix.
         
-        *Notes*
+        **Examples**
+        
+        Suppose the variant dataset saved at *data/example_lmmreg.vds* has Boolean variant annotations
+        ``va.useInKinship``. To compute a full-rank distributed eigendecomposition of the realized relationship
+        matrix:
 
-        This method transforms an local eigendecomposition of the LD matrix to a distributed eigendecomposition
-        of the corresponding realized relationship matrix.
+        >>> vds1 = hc.read("data/example_lmmreg.vds")
+        >>> ld = vds1.filter_variants_expr('va.useInKinship').ld_matrix()
+        >>> eig = ld.eigen().to_eigen_distributed_rrm(vds1, ld.num_samples_used())
+                
+        **Notes**
+
+        When run on the rank :math:`k` eigendecomposition of the LD matrix computed from a subset of the variants
+        in the variant dataset ``vds`` using ``num_samples_in_ld_matrix`` samples, this method returns the
+        the rank :math:`k` distributed eigendecomposition of the realized relationship matrix (RRM) built
+        from the same variants.
+
+        The following route to the variable ``eig`` is mathematically equivalent to the example above:
+
+        >>> vds1 = hc.read("data/example_lmmreg.vds")
+        >>> km = vds1.filter_variants_expr('va.useInKinship').rrm()
+        >>> eig = km.eigen().distribute()
+
+        However these implementations differ in their scalability: the LD route in the example is variant-limited
+        since ``ld.eigen()`` runs on the local LD matrix, whereas the more direct RRM route is sample-limited (since
+        ``km.eigen()`` runs on the local kinship matrix). In particular, only this method handles the case of more than
+        32k samples.
         
-        The variant dataset must include all variants represented in the eigendecomposition of the LD matrix.
+        **Details**
         
-        Filtering to just these variants, let :math:`G` be the genotype matrix with columns normalized to have
-        mean 0 and variance 1. This matrix has :math:`n` rows and :math:`m` columns, the number of samples and variants,
+        This method uses distributed matrix multiplication by the normalized genotype matrix to convert
+        variant-indexed right singular vectors to sample-indexed left singular vectors. In particular, the variant
+        dataset must include all variants represented in the eigendecomposition of the LD matrix. Filtering
+        to just these variants, let :math:`G` be the genotype matrix with columns normalized to have
+        mean 0 and variance 1. :math:`G` has :math:`n` rows and :math:`m` columns corresponding to samples and variants,
         respectively. Let :math:`K` and :math:`L` be the corresponding RRM and LD matrix, respectively.
-        Then by definition:
+        Then by definition,
 
         .. math::
           
           \\begin{align*}
-          K &= \\frac{1}{m} G G^T //
+          K &= \\frac{1}{m} G G^T \\\\
           L &= \\frac{1}{n} G^T G
           \\end{align*}
         
@@ -110,25 +134,23 @@ class Eigen:
         .. math::
         
           \\begin{align*}
-          G &= U S^{\\frac{1}{2}} V.t //
-          K &= \\frac{1}{m} U S U.t //
-          L &= \\frac{1}{n} V S V.t
+          G &= U S^{\\frac{1}{2}} V^T \\\\
+          K &= U \\left(\\frac{1}{m} S \\right) U^T \\\\
+          L &= V \\left(\\frac{1}{n} S \\right) V^T
           \\end{align*}
           
         where the diagonal matrix :math:`S` is of the necessary dimension in each case, extended by zeroes.
           
-        In particular, given :math:`V` and :math:`\\frac{1}{n} S` (whose columns and diagonal are the eigenvectors and
-        eigenvalues, respectively, of the LD matrix) and :math:`n` (the number of samples used to form the LD
-        matrix), we can solve for the top :math:`m` eigenvectors and eigenvalues of the RRM by:
+        In particular, given :math:`V_k` and :math:`S_k` (whose columns and diagonal are
+        the top :math:`k` eigenvectors and eigenvalues, respectively, of the LD matrix), then the top
+        :math:`k` eigenvectors and eigenvalues of the RRM are given by
         
         .. math::
         
           \\begin{align*}
-          U_m &= G * V * (\\frac{m}{n} S_m)^{-\\frac{1}{2}} \\
-          S_m &= \\frac{1}{m} S
+          U_k &= G V \\left(\\frac{n}{m} S_k\\right)^{-\\frac{1}{2}} \\\\
+          S^{\\prime}_k &= \\frac{n}{m} S_k
           \\end{align*}
-        
-        These emcompass all non-zero eigenvalues of the RRM.
         
         :param vds: Variant dataset
         :type vds: :py:class:`.VariantDataset`
@@ -143,28 +165,22 @@ class Eigen:
     
     @typecheck_method(path=strlike)
     def write(self, path):
-        """
-        Writes the eigendecomposition to a directory enging in ``.eig``.
-
-        **Examples**
+        """Writes the eigendecomposition to a path.
 
         >>> vds.rrm().eigen().write('output/example.eig')
 
-        :param str path: path to which to write the eigendecomposition
+        :param str path: path to directory ending in ``.eig`` to which to write the eigendecomposition
         """
 
         self._jeigen.write(Env.hc()._jhc, path)
         
     @staticmethod
     def read(path):
-        """
-        Reads the eigendecomposition from a directory ending in ``.eig``.
+        """Reads the eigendecomposition from a path.
 
-        **Examples**
+        >>>  eig = Eigen.read('data/example.eig')
 
-        >>>  eigen = Eigen.read('data/example.eig')
-
-        :param str path: path from which to read the LD matrix
+        :param str path: path to directory ending in ``.eig`` from which to read the LD matrix
         
         :return: Eigendecomposition
         :rtype: :py:class:`.Eigen`
@@ -192,10 +208,10 @@ class EigenDistributed:
             self._key_schema = Type._from_java(self._jeigen.rowSignature())
         return self._key_schema
     
-    def sample_list(self):
-        """Gets the list of samples.
+    def row_ids(self):
+        """Gets the list of row IDs.
 
-        :return: List of samples.
+        :return: List of rows.
         :rtype: list of str
         """
         return [self.key_schema._convert_to_py(s) for s in self._jeigen.rowIds()]
@@ -225,3 +241,29 @@ class EigenDistributed:
         :rtype: int
         """
         return self._jeigen.nEvects()
+    
+    @typecheck_method(path=strlike)
+    def write(self, path):
+        """Writes the eigendecomposition to a path.
+
+        >>> vds.rrm().eigen().distribute().write('output/example.eigd')
+
+        :param str path: path to directory ending in ``.eigd`` to which to write the eigendecomposition
+        """
+
+        self._jeigen.write(path)
+        
+    @staticmethod
+    def read(path):
+        """Reads the eigendecomposition from a path.
+
+        >>> eig = EigenDistributed.read('data/example.eigd')
+
+        :param str path: path to directory ending in ``.eigd`` from which to read the LD matrix
+        
+        :return: Eigendecomposition
+        :rtype: :py:class:`.EigenDistributed`
+        """
+
+        jeigen = Env.hail().stats.EigenDistributed.read(Env.hc()._jhc, path)
+        return EigenDistributed(jeigen)

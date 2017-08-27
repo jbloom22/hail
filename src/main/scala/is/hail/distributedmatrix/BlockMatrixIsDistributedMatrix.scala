@@ -9,7 +9,6 @@ import org.apache.spark.mllib.linalg.distributed._
 import org.apache.hadoop.io._
 import java.io._
 import org.json4s._
-import java.net._
 
 import scala.reflect.ClassTag
 

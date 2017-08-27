@@ -76,10 +76,10 @@ class EigenSuite extends SparkSuite {
   }
 
   @Test def readWriteIdentity() {
-    val fname = tmpDir.createTempFile("test", extension = ".eig")
-    
-    val seed = 0
+    // testing small example
+    val file = tmpDir.createTempFile("test", extension = ".eig")
 
+    val seed = 0
     val rand = new JDKRandomGenerator()
     rand.setSeed(seed)
 
@@ -91,7 +91,34 @@ class EigenSuite extends SparkSuite {
     val svdW = svd(W)
     val eigen = Eigen(TString, samplesIds, svdW.leftVectors, svdW.singularValues)
  
-    eigen.write(hc, fname)
-    assertEqual(eigen, Eigen.read(hc, fname))
+    eigen.write(hc, file)
+    assertEqual(eigen, Eigen.read(hc, file))
+    
+    // testing eigen from kinship matrix and LD matrix
+    val fileK = tmpDir.createTempFile("testK", extension = ".eig")
+    val fileL = tmpDir.createTempFile("testL", extension = ".eig")
+    val fileDistK = tmpDir.createTempFile("testDistK", extension = ".eigd")
+    val fileDistL = tmpDir.createTempFile("testDistL", extension = ".eigd")
+
+    val vds = hc.importVCF("src/test/resources/sample.vcf")
+    
+    val eigK = vds.rrm().eigen()
+    eigK.write(hc, fileK)
+    assertEqual(eigK, Eigen.read(hc, fileK))
+
+    val eigL = vds.ldMatrix().eigen()
+    eigL.write(hc, fileL)
+    assertEqual(eigL, Eigen.read(hc, fileL))
+    
+    val eigDistK = eigK.distribute(hc.sc)
+    eigDistK.write(fileDistK)
+    assertEqual(eigDistK.localize(), EigenDistributed.read(hc, fileDistK).localize())
+
+    val eigDistL = eigL.distribute(hc.sc)
+    eigDistL.write(fileDistL)
+    assertEqual(eigDistL.localize(), EigenDistributed.read(hc, fileDistL).localize())
+    
+//    eigK.write(hc, "/Users/jbloom/data/lmmreg_scaling/example.eig")
+//    eigDistK.write("/Users/jbloom/data/lmmreg_scaling/example.eigd")
   }
 }
