@@ -2,8 +2,7 @@ from hail.typecheck import *
 
 from hail.java import *
 from hail.expr import Type, TString
-from hail.eigen import Eigen, EigenDistributed
-
+from hail.eigen import Eigen
 
 class KinshipMatrix:
     """
@@ -97,11 +96,10 @@ class KinshipMatrix:
         """
         self._jkm.exportIdFile(output)
 
-    @typecheck_method(k=nullable(integral))
-    def eigen(self, k=None):
+    def eigen(self):
         """
         Compute an eigendecomposition of the kinship matrix. The number of eigenvectors returned is the minimum of
-        the number of variants used to form the kinship matrix, the number of samples, and k (if supplied).
+        the number of variants used to form the kinship matrix and the number of samples.
         
         .. caution::
         
@@ -109,25 +107,8 @@ class KinshipMatrix:
             eigendecomposition using LAPACK. Only call this method when the kinship matrix is small enough to fit in
             local memory; the absolute limit on the number of samples is 32k.
         
-        :param k: Upper bound on the number of eigenvectors to return.
-        :type K: int or None
-        
         :return: Eigendecomposition of the kinship matrix.
         :rtype: Eigen
         """
-        return Eigen(self._jkm.eigen(joption(k)))
+        return Eigen(self._jkm.eigen())
     
-    @typecheck_method(k=nullable(integral))
-    def eigen_distributed(self, k=None):
-        """
-        Compute an eigendecomposition of the kinship matrix, with eigenvectors stored as a distributed matrix.
-        The number of eigenvectors returned is the minimum of the number of variants used to form the kinship matrix,
-        the number of samples, and k (if supplied).
-                
-        :param k: Upper bound on the number of eigenvectors to return.
-        :type K: int or None
-        
-        :return: Eigendecomposition of the kinship matrix.
-        :rtype: EigenDistributed
-        """
-        return EigenDistributed(self._jkm.eigenDistributed(joption(k)))

@@ -41,7 +41,8 @@ object LinearMixedRegression {
     optNEigs: Option[Int],
     blockSize: Int): VariantDataset = {
 
-    val eigen = kinshipMatrix.eigen(optNEigs)
+    val nEigs = optNEigs.getOrElse(kinshipMatrix.sampleIds.length)
+    val eigen = kinshipMatrix.eigen().takeTop(nEigs)
     
     applyEigen(vds, eigen, yExpr, covExpr, useML, rootGA, rootVA, runAssoc, optDelta, useDosages, blockSize)
   }

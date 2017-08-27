@@ -49,28 +49,11 @@ case class KinshipMatrix(hc: HailContext, sampleSignature: Type, matrix: Indexed
     KinshipMatrix(hc, sampleSignature, new IndexedRowMatrix(filteredRowsAndCols), filteredSamplesIds, nVariantsUsed)
   }
   
-  def eigen(optNEigs: Option[Int]): Eigen = {
+  def eigen(): Eigen = {
+    require(nVariantsUsed < Int.MaxValue)
     val K = matrix.toLocalMatrix().asBreeze().asInstanceOf[DenseMatrix[Double]]
-
-    info(s"Computing eigenvectors of kinship matrix...")
-    val eig = printTime(eigSymD(K))
-
-    val maxRank = sampleIds.length min nVariantsUsed.toInt
-    val nEigs = optNEigs.getOrElse(maxRank)
-    optNEigs.foreach( k => if (k > nEigs) info(s"Requested $k evects but maximum rank is $maxRank."))
     
-    info(s"Eigendecomposition complete, returning $nEigs eigenvectors.")
-
-    val n = K.cols
-    assert(n == eig.eigenvectors.cols)
-    
-    val (evects, evals) =
-      if (nEigs == n)
-        (eig.eigenvectors, eig.eigenvalues)
-      else
-        (eig.eigenvectors(::, (n - nEigs) until n).copy, eig.eigenvalues((n - nEigs) until n).copy)
-    
-    Eigen(sampleSignature, sampleIds, evects, evals)
+    Eigen(sampleSignature, sampleIds, K, Some(nVariantsUsed.toInt))
   }
 
   /**

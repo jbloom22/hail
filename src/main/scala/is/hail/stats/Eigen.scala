@@ -123,6 +123,27 @@ case class Eigen(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMat
 }
 
 object Eigen {
+  def apply(rowSignature: Type, rowIds: Array[Annotation], X: DenseMatrix[Double], optRankBound: Option[Int]): Eigen = {
+    val n = rowIds.length
+    require(n == X.rows && n == X.cols)
+    
+    info(s"Computing eigenvectors...")
+    val eig = printTime(eigSymD(X))
+    
+    val nEigs = optRankBound.map(_ min n).getOrElse(n)
+    
+    info(s"Eigendecomposition complete, returning $nEigs eigenvectors.")
+        
+    val (evects, evals) =
+      if (nEigs == n)
+        (eig.eigenvectors, eig.eigenvalues)
+      else
+        (eig.eigenvectors(::, (n - nEigs) until n).copy, eig.eigenvalues((n - nEigs) until n).copy)
+    
+    Eigen(rowSignature, rowIds, evects, evals)
+  }
+  
+  
   private val metadataRelativePath = "/metadata.json"
   private val evectsRelativePath = "/evects"
   private val evalsRelativePath = "/evals"

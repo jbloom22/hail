@@ -3337,18 +3337,18 @@ class VariantDataset(object):
         Suppose the variant dataset saved at *data/example_lmmreg.vds* has Boolean variant annotations ``va.useInKinship`` and ``va.useInAssociation``, and numeric or Boolean sample annotations ``sa.pheno``, ``sa.cov1``, and ``sa.cov2``.
 
         >>> vds1 = hc.read("data/example_lmmreg.vds")
-        >>> kinship_matrix = vds1.filter_variants_expr('va.useInKinship').rrm()
-        >>> eigen = kinship_matrix.eigen()
+        >>> rrm = vds1.filter_variants_expr('va.useInKinship').rrm()
+        >>> eigen = rrm.eigen()
         >>> lmm_vds = (vds1.filter_variants_expr('va.useInAssociation')
         ...     .lmmreg_eigen(eigen, 'sa.pheno', ['sa.cov1', 'sa.cov2']))
 
         Equivalent to:
 
         >>> vds1 = hc.read("data/example_lmmreg.vds")
-        >>> ld_matrix = vds1.filter_variants_expr('va.useInKinship').ld_matrix()
-        >>> eigen = ld_matrix.eigen_rrm(vds1)
+        >>> ld = vds1.filter_variants_expr('va.useInKinship').ld_matrix()
+        >>> eigen = ld.eigen().to_eigen_distributed_rrm(vds1, ld.num_samples_used())
         >>> lmm_vds = (vds1.filter_variants_expr('va.useInAssociation')
-        ...     .lmmreg_eigen(eigen, 'sa.pheno', ['sa.cov1', 'sa.cov2']))
+        ...     .lmmreg_eigen_distributed(eigen, 'sa.pheno', ['sa.cov1', 'sa.cov2']))
 
         **Notes**
 
@@ -3409,17 +3409,17 @@ class VariantDataset(object):
         
         >>> vds1 = hc.read("data/example_lmmreg.vds")
         >>> kinship_matrix = vds1.filter_variants_expr('va.useInKinship').rrm()
-        >>> eigen = kinship_matrix.eigen_distributed()
+        >>> eigen = kinship_matrix.eigen().distribute()
         >>> lmm_vds = (vds1.filter_variants_expr('va.useInAssociation')
         ...     .lmmreg_eigen_distributed(eigen, 'sa.pheno', ['sa.cov1', 'sa.cov2']))
 
         Equivalent to:
 
         >>> vds1 = hc.read("data/example_lmmreg.vds")
-        >>> ld_matrix = vds1.filter_variants_expr('va.useInKinship').ld_matrix()
-        >>> eigen = ld_matrix.eigen_distributed_rrm(vds1)
+        >>> ld = vds1.filter_variants_expr('va.useInKinship').ld_matrix()
+        >>> eigen = ld.eigen().to_eigen_distributed_rrm(vds1, ld.num_samples_used())
         >>> lmm_vds = (vds1.filter_variants_expr('va.useInAssociation')
-        ...     .lmmreg_eigen_distributed(eigen, 'sa.pheno', ['sa.cov1', 'sa.cov2']))        
+        ...     .lmmreg_eigen_distributed(eigen, 'sa.pheno', ['sa.cov1', 'sa.cov2']))   
         
         """
         
