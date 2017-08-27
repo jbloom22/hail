@@ -2,7 +2,6 @@ package is.hail.methods
 
 import is.hail.HailContext
 import is.hail.distributedmatrix.{BlockMatrixIsDistributedMatrix, DistributedMatrix}
-import is.hail.distributedmatrix.DistributedMatrix.implicits._
 import is.hail.stats.RegressionUtils
 import is.hail.utils._
 import is.hail.stats._
@@ -101,29 +100,11 @@ case class LDMatrix(matrix: IndexedRowMatrix, variants: Array[Variant], nSamples
   def toLocalMatrix: SparkMatrix = {
     matrix.toBlockMatrixDense().toLocalMatrix()
   }
-  
-  def eigen(optNEigs: Option[Int]): Eigen = {
-    val L = matrix.toLocalMatrix().asBreeze().asInstanceOf[DenseMatrix[Double]]
 
-    info(s"Computing eigenvectors of LD matrix...")
-    val eig = printTime(eigSymD(L))
-    
-    val maxRank = variants.length min nSamplesUsed
-    val nEigs = optNEigs.getOrElse(maxRank)
-    optNEigs.foreach( k => if (k > nEigs) info(s"Requested $k evects but maximum rank is $maxRank.") )
-    
-    info(s"Eigendecomposition complete, returning $nEigs eigenvectors.")
-    
-    val m = L.rows
-    assert(m == L.cols && m == eig.eigenvectors.cols)
-    
-    val (evects, evals) =
-      if (nEigs == m)
-        (eig.eigenvectors, eig.eigenvalues)
-      else
-        (eig.eigenvectors(::, (m - nEigs) until m).copy, eig.eigenvalues((m - nEigs) until m).copy)
-    
-    Eigen(TVariant, variants.map(_.asInstanceOf[Annotation]), evects, evals)
+  def eigen(): Eigen = {
+    val L = matrix.toLocalMatrix().asBreeze().asInstanceOf[DenseMatrix[Double]]
+    1
+    Eigen(TVariant, variants.map(_.asInstanceOf[Annotation]), L, Some(nSamplesUsed))
   }
   
   def write(uri: String) {

@@ -1,6 +1,6 @@
 from hail.java import *
 from hail.representation import Variant
-from hail.eigen import Eigen, EigenDistributed
+from hail.eigen import Eigen
 from hail.typecheck import *
 
 class LDMatrix:
@@ -30,6 +30,13 @@ class LDMatrix:
         from pyspark.mllib.linalg.distributed import IndexedRowMatrix
 
         return IndexedRowMatrix(self._jldm.matrix())
+    
+    def num_samples_used(self):
+        """
+        Number of samples used to form the LD matrix.
+        """
+        
+        return self._jldm.nSamplesUsed()
 
     def to_local_matrix(self):
         """
@@ -48,65 +55,6 @@ class LDMatrix:
         j_local_mat = self._jldm.toLocalMatrix()
         return DenseMatrix(j_local_mat.numRows(), j_local_mat.numCols(), list(j_local_mat.toArray()), j_local_mat.isTransposed())
     
-    @typecheck_method(vds=anytype,
-                      k=nullable(integral))
-    def eigen_rrm(self, vds, k=None):
-        """
-        Compute an eigendecomposition of the Realized Relationship Matrix (RRM) of the variant dataset via an
-        eigendecomposition of the LD matrix.
-        
-        *Notes*
-
-        This method computes and then uses eigendecomposition of the LD matrix to derive an eigendecomposition
-        of the corresponding RRM. All variants in the LD matrix must be present in the VDS. The number of eigenvectors
-        returned is the minimum of variants, the number of samples used to form the LD matrix, and k.
-        
-        .. caution::
-        
-            This method collects the LD matrix to a local matrix on the driver in order to compute the full
-            eigendecomposition using LAPACK. Only call this method when the LD matrix and the resulting matrix
-            of eigenvectors are small enough to fit in local memory. The absolute limit on the number of variants
-            is 32k. The absolute limit on the number of elements in the eigenvector matrix is :math:`2^{31} - 1` (about 2 billion).
-                    
-        :param vds: Variant dataset
-        :type vds: :py:class:`.VariantDataset`
-        
-        :param k: Upper bound on the number of eigenvectors to return.
-        :type k: int or None
-        
-        :return: Eigendecomposition of the kinship matrix.
-        :rtype: Eigen
-        """
-        
-        return Eigen(self._jldm.eigenRRM(vds._jvds, joption(k)))
-    
-    @typecheck_method(vds=anytype,
-                      k=nullable(integral))
-    def eigen_distributed_rrm(self, vds, k=None):
-        """
-        Compute an eigendecomposition of the Realized Relationship Matrix (RRM) of the variant dataset via an
-        eigendecomposition of the LD matrix.
-        
-        *Notes*
-
-        This method computes and then uses eigendecomposition of the LD matrix to derive an eigendecomposition
-        of the corresponding RRM, with eigenvectors stored as a distributed matrix. All variants in the LD matrix
-        must be present in the VDS. The number of eigenvectors returned is the minimum of variants, the number of
-        samples used to form the LD matrix, and k.
-                            
-        :param vds: Variant dataset
-        :type vds: :py:class:`.VariantDataset`
-        
-        :param k: Upper bound on the number of eigenvectors to return.
-        :type k: int or None
-        
-        :return: Eigendecomposition of the kinship matrix.
-        :rtype: EigenDistributed
-        """
-        
-        return EigenDistributed(self._jldm.eigenDistributedRRM(vds._jvds, joption(k)))
-
-
     @typecheck_method(path=strlike)
     def write(self, path):
         """
@@ -141,3 +89,19 @@ class LDMatrix:
 
         jldm = Env.hail().methods.LDMatrix.read(Env.hc()._jhc, path)
         return LDMatrix(jldm)
+
+    def eigen(self):
+        """
+        Compute an eigendecomposition of the LD matrix. The number of eigenvectors returned is the minimum of
+        the number of samples used to form the LD matrix and the number of variants.
+        
+        .. caution::
+        
+            This method collects the LD matrix to a local matrix on the driver in order to compute the full
+            eigendecomposition using LAPACK. Only call this method when the LD matrix is small enough to fit in
+            local memory; the absolute limit on the number of variants is 32k.
+        
+        :return: Eigendecomposition of the LD matrix.
+        :rtype: Eigen
+        """
+        return Eigen(self._jldm.eigen())

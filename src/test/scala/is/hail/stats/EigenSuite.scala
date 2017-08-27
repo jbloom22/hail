@@ -37,9 +37,9 @@ class EigenSuite extends SparkSuite {
       val rank = (H.rows min H.cols) - 1
       
       val vds = stats.vdsFromGtMatrix(hc)(G)
-      val eigenK = vds.rrm().eigen(None)
+      val eigenK = vds.rrm().eigen()
       val ldMatrix = vds.ldMatrix()
-      val eigenL = ldMatrix.eigen(None).toEigenDistributedRRM(vds, ldMatrix.nSamplesUsed).localize()
+      val eigenL = ldMatrix.eigen().toEigenDistributedRRM(vds, ldMatrix.nSamplesUsed).localize()
       
       val r = -rank to -1
       
