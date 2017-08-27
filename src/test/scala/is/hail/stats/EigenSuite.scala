@@ -76,7 +76,7 @@ class EigenSuite extends SparkSuite {
   }
 
   @Test def readWriteIdentity() {
-    val fname = tmpDir.createTempFile("test")
+    val fname = tmpDir.createTempFile("test", extension = ".eig")
     
     val seed = 0
 

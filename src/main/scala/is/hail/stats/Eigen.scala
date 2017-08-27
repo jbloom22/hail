@@ -5,13 +5,16 @@ import is.hail.HailContext
 import is.hail.annotations.Annotation
 import is.hail.distributedmatrix.{BlockMatrixIsDistributedMatrix, DistributedMatrix}
 import is.hail.distributedmatrix.DistributedMatrix.implicits._
-import is.hail.expr.{TString, TVariant, Type}
+import is.hail.expr.{JSONAnnotationImpex, Parser, TString, TVariant, Type}
 import is.hail.utils._
 import is.hail.variant.{Variant, VariantDataset}
 import org.apache.spark.SparkContext
 import org.apache.spark.mllib.linalg
 import org.apache.spark.mllib.linalg.distributed.BlockMatrix
-import org.json4s.jackson
+import org.json4s.jackson.{JsonMethods, Serialization}
+import org.json4s.{JArray, JInt, JObject, JString, JValue, jackson}
+
+import scala.reflect.ClassTag
 
 case class Eigen(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMatrix[Double], evals: DenseVector[Double]) {
   require(evects.rows == rowIds.length)
@@ -89,9 +92,9 @@ case class Eigen(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMat
   
   import Eigen._
   
-  def write(hc: HailContext, uri: String) {
-    if (rowSignature != TString)
-      fatal(s"In order to write, rows must have schema TString, got $rowSignature") // FIXME
+  def write(hc: HailContext, uri: String) {   
+    if (!uri.endsWith(".eig") && !uri.endsWith(".eig/"))
+      fatal(s"output path ending in `.eig' required, found `$uri'")
     
     val hadoop = hc.sc.hadoopConfiguration
     hadoop.mkDir(uri)
@@ -114,11 +117,20 @@ case class Eigen(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMat
       }
     }
     
-    hadoop.writeDataFile(uri + metadataRelativePath) { os =>
-      jackson.Serialization.write(
-        EigenMetadata(rowIds.length, evals.length, rowIds.map(_.toString())),
-          os)
-    }
+    val sb = new StringBuilder
+    rowSignature.pretty(sb, printAttrs = true, compact = true)
+    val rowSignatureString = sb.result()
+    
+    val rowIdsJson = JArray(
+      rowIds.map(rowId => JObject(("row_id", JSONAnnotationImpex.exportAnnotation(rowId, rowSignature)))).toList)
+
+    val json = JObject(
+      ("row_schema", JString(rowSignatureString)),
+      ("row_ids", rowIdsJson),
+      ("num_rows", JInt(rowIds.length)),
+      ("num_eigs", JInt(nEvects)))
+        
+    hadoop.writeTextFile(uri + metadataRelativePath)(Serialization.writePretty(json, _))
   }
 }
 
@@ -143,22 +155,79 @@ object Eigen {
     Eigen(rowSignature, rowIds, evects, evals)
   }
   
-  
   private val metadataRelativePath = "/metadata.json"
   private val evectsRelativePath = "/evects"
   private val evalsRelativePath = "/evals"
   
   def read(hc: HailContext, uri: String): Eigen = {
+    if (!uri.endsWith(".eig") && !uri.endsWith(".eig/"))
+      fatal(s"input path ending in `.eig' required, found `$uri'")
+
     val hadoop = hc.hadoopConf
 
-    val EigenMetadata(nSamples, nEigs, sampleIds) =
-      hadoop.readTextFile(uri + metadataRelativePath) { isr =>
-        jackson.Serialization.read[EigenMetadata](isr)
-      }
+    val json = try {
+      hadoop.readFile(uri + metadataRelativePath)(
+        in => JsonMethods.parse(in))
+    } catch {
+      case e: Throwable => fatal(
+        s"""
+           |invalid eig metadata file.
+           |  Recreate with current version of Hail.
+           |  caught exception: ${ expandException(e, logMessage = true) }
+         """.stripMargin)
+    }
 
-    assert(nSamples == sampleIds.length)
+    val fields = json match {
+      case jo: JObject => jo.obj.toMap
+      case _ =>
+        fatal(
+          s"""eig: invalid metadata value
+             |  Recreate with current version of Hail.""".stripMargin)
+    }
+
+    def getAndCastJSON[T <: JValue](fname: String)(implicit tct: ClassTag[T]): T =
+      fields.get(fname) match {
+        case Some(t: T) => t
+        case Some(other) =>
+          fatal(
+            s"""corrupt eig: invalid metadata
+               |  Expected `${ tct.runtimeClass.getName }' in field `$fname', but got `${ other.getClass.getName }'
+               |  Recreate with current version of Hail.""".stripMargin)
+        case None =>
+          fatal(
+            s"""corrupt eig: invalid metadata
+               |  Missing field `$fname'
+               |  Recreate with current version of Hail.""".stripMargin)
+      }
+   
+    val rowSignature = fields.get("row_schema") match {
+      case Some(t: JString) => Parser.parseType(t.s)
+      case Some(other) => fatal(
+        s"""corrupt eig: invalid metadata
+           |  Expected `JString' in field `row_schema', but got `${ other.getClass.getName }'
+           |  Recreate with current version of Hail.""".stripMargin)
+      case _ => TString
+    }
     
-    val nEntries = nSamples * nEigs
+    val rowIds = getAndCastJSON[JArray]("row_ids")
+      .arr
+      .map {
+        case JObject(List(("row_id", jRowId))) =>
+          JSONAnnotationImpex.importAnnotation(jRowId, rowSignature, "row_ids")
+        case other => fatal(
+          s"""corrupt eig: invalid metadata
+             |  Invalid sample annotation metadata
+             |  Recreate with current version of Hail.""".stripMargin)
+      }
+      .toArray
+    
+    val nRows = getAndCastJSON[JInt]("num_rows").num.toInt
+    
+    val nEigs = getAndCastJSON[JInt]("num_eigs").num.toInt
+    
+    assert(nRows == rowIds.length)
+    
+    val nEntries = nRows * nEigs
     val evectsData = Array.ofDim[Double](nEntries)
     val evalsData = Array.ofDim[Double](nEigs)
     
@@ -178,11 +247,11 @@ object Eigen {
       }
     }
     
-    new Eigen(TString, sampleIds.asInstanceOf[Array[Annotation]], new DenseMatrix[Double](nSamples, nEigs, evectsData), DenseVector(evalsData))
+    new Eigen(rowSignature, rowIds, new DenseMatrix[Double](nRows, nEigs, evectsData), DenseVector(evalsData))
   }
 }
 
-case class EigenMetadata(nSamples: Int, nEigs: Int, sampleIds: Array[String])
+case class EigenFileMetadata(rowSignature: Type, rowIds: Array[String], nRows: Int, nEigs: Int)
 
 case class EigenDistributed(rowSignature: Type, rowIds: Array[Annotation], evects: BlockMatrix, evals: DenseVector[Double]) {
   require(evects.numRows() == rowIds.length)

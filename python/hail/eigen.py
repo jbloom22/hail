@@ -31,7 +31,7 @@ class Eigen:
     def evects(self):
         """Gets the matrix whose columns are eigenvectors, ordered by increasing eigenvalue.
                 
-        :return: Matrix of eigenvectors.
+        :return: Matrix of whose columns are eigenvectors.
         :rtype: `Matrix <https://spark.apache.org/docs/2.1.0/api/python/pyspark.mllib.html#pyspark.mllib.linalg.Matrix>`__
         """
         from pyspark.mllib.linalg import DenseMatrix
@@ -59,12 +59,12 @@ class Eigen:
     @typecheck_method(k=integral)
     def take_top(self, k):
         """Take the top k eigenvectors and eigenvalues.
-        If k is greater than the number present, then the calling eigendecomposition is returned.
+        If k is greater than or equal to the number present, then the calling eigendecomposition is returned.
 
         :param int k: Number of eigenvectors and eigenvalues to return.
 
         :return: The top k eigenvectors and eigenvalues.
-        :rtype: Eigen
+        :rtype: :py:class:`.Eigen`
         """
         
         return Eigen(self._jeigen.takeTop(k))
@@ -73,7 +73,7 @@ class Eigen:
         """Convert to a distributed eigendecomposition.
         
         :return: Distributed eigendecomposition.
-        :rtype: EigenDistributed
+        :rtype: :py:class:`.EigenDistributed`
         """
         
         return EigenDistributed(self._jeigen.distribute(Env.hc()._jsc))
@@ -135,8 +135,8 @@ class Eigen:
         
         :param int num_samples_in_ld_matrix: Number of samples used to form the LD matrix.
         
-        :return: Distributed eigendecomposition of the kinship matrix.
-        :rtype: EigenDistributed
+        :return: Distributed eigendecomposition of the realized relationship matrix.
+        :rtype: :py:class:`.EigenDistributed`
         """
         
         return EigenDistributed(self._jeigen.toEigenDistributedRRM(vds._jvds, num_samples_in_ld_matrix))
@@ -144,13 +144,13 @@ class Eigen:
     @typecheck_method(path=strlike)
     def write(self, path):
         """
-        Writes the eigendecomposition to a file.
+        Writes the eigendecomposition to a directory enging in ``.eig``.
 
         **Examples**
 
         >>> vds.rrm().eigen().write('output/example.eig')
 
-        :param str path: the path to which to write the eigendecomposition
+        :param str path: path to which to write the eigendecomposition
         """
 
         self._jeigen.write(Env.hc()._jhc, path)
@@ -158,15 +158,16 @@ class Eigen:
     @staticmethod
     def read(path):
         """
-        Reads the eigendecomposition from a file.
+        Reads the eigendecomposition from a directory ending in ``.eig``.
 
         **Examples**
 
         >>>  eigen = Eigen.read('data/example.eig')
 
-        :param str path: the path from which to read the LD matrix
+        :param str path: path from which to read the LD matrix
         
-        :rtype Eigen
+        :return: Eigendecomposition
+        :rtype: :py:class:`.Eigen`
         """
 
         jeigen = Env.hail().stats.Eigen.read(Env.hc()._jhc, path)
@@ -202,7 +203,7 @@ class EigenDistributed:
     def evects(self):
         """Gets the block matrix whose columns are eigenvectors, ordered by increasing eigenvalue.
                 
-        :return: Matrix of eigenvectors.
+        :return: Matrix whose columns are eigenvectors.
         :rtype: `BlockMatrix <https://spark.apache.org/docs/latest/api/python/pyspark.mllib.html#pyspark.mllib.linalg.distributed.BlockMatrix>`__
         """
         from pyspark.mllib.linalg.distributed import BlockMatrix
