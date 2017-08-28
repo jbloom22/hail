@@ -3427,7 +3427,7 @@ class VariantDataset(object):
         jvds = self._jvdf.lmmregEigenDistributed(eigen_distributed._jeigen, y,
                                                  jarray(Env.jvm().java.lang.String, covariates), use_ml, global_root,
                                                  va_root, run_assoc, joption(delta), use_dosages, 
-                                                 path_to_projection, variant_block_size)
+                                                 joption(path_to_projection), variant_block_size)
         return VariantDataset(self.hc, jvds)
 
     @handle_py4j

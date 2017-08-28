@@ -588,10 +588,10 @@ class LinearMixedRegressionSuite extends SparkSuite {
     
     val fileRRM = tmpDir.createTempFile("testRRM", extension = ".proj")
     val fileLD = tmpDir.createTempFile("testLD", extension = ".proj")
-    
-    LinearMixedRegression.writeProjection(fileLD, vdsFastLMMDownsampled, eigenFromLD, "sa.pheno",  Array("sa.cov"), useDosages = false)
-    LinearMixedRegression.writeProjection(fileRRM, vdsFastLMMDownsampled, eigenFromRRM, "sa.pheno",  Array("sa.cov"), useDosages = false)
-    
+
+    eigenFromRRM.projectAndWrite(fileRRM, vdsFastLMMDownsampled, Some("sa.pheno"),  Array("sa.cov"), useDosages = false)
+    eigenFromLD.projectAndWrite(fileLD, vdsFastLMMDownsampled, Some("sa.pheno"),  Array("sa.cov"), useDosages = false)
+
     val vdsLD230 = vdsFastLMMDownsampled.lmmregEigenDistributed(eigenFromLD, "sa.pheno", Array("sa.cov"), delta = None)
     val vdsRRM230 = vdsFastLMMDownsampled.lmmregEigenDistributed(eigenFromRRM, "sa.pheno", Array("sa.cov"), delta = None)
     val vdsLD230Read = vdsFastLMMDownsampled.lmmregEigenDistributed(eigenFromLD, "sa.pheno", Array("sa.cov"), delta = None, pathToProjection = Some(fileLD))

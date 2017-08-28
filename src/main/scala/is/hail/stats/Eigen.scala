@@ -1,6 +1,6 @@
 package is.hail.stats
 
-import breeze.linalg.{*, DenseMatrix, DenseVector}
+import breeze.linalg.{*, DenseMatrix, DenseVector, sum}
 import is.hail.HailContext
 import is.hail.annotations.Annotation
 import is.hail.distributedmatrix.{BlockMatrixIsDistributedMatrix, DistributedMatrix}
@@ -13,6 +13,7 @@ import org.apache.spark.mllib.linalg
 import org.apache.spark.mllib.linalg.distributed.BlockMatrix
 import org.json4s.jackson.{JsonMethods, Serialization}
 import org.json4s.{JArray, JInt, JObject, JString, JValue}
+
 import scala.reflect.ClassTag
 
 object Eigen {
@@ -150,11 +151,29 @@ case class Eigen(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMat
   def takeTop(k: Int): Eigen = {
     if (k < 1)
       fatal(s"k must be a positive integer, got $k")
-    else if (k >= nEvects)
+    
+    if (k >= nEvects)
       this
     else
       Eigen(rowSignature, rowIds,
         evects(::, (nEvects - k) until nEvects).copy, evals((nEvects - k) until nEvects).copy)
+  }
+
+  def dropSmall(proportion: Double = 1e-6): Eigen = {
+    if (proportion < 0 || proportion >= 1)
+      fatal(s"Relative threshold must be in range [0,1), got $proportion")
+
+    val threshold = proportion * sum(evals)
+    var acc = 0.0
+    var i = 0
+    while (acc <= threshold) {
+      acc += evals(i)
+      i += 1
+    }
+    
+    info(s"Dropping $i eigenvectors, leaving ${nEvects - i} of $nEvects")
+    
+    Eigen(rowSignature, rowIds, evects(::, i until nEvects).copy, evals(i until nEvects).copy)
   }
   
   def evectsSpark(): linalg.DenseMatrix = new linalg.DenseMatrix(evects.rows, evects.cols, evects.data, evects.isTranspose)
@@ -390,5 +409,26 @@ case class EigenDistributed(rowSignature: Type, rowIds: Array[Annotation], evect
       ("num_eigs", JInt(nEvects)))
         
     hadoop.writeTextFile(uri + metadataRelativePath)(Serialization.writePretty(json, _))
+  }
+  
+  // FIXME need to verify dosages same
+  // FIXME passing in y and cov is a hack, it should take the complete samples, or be pre-filtered
+  def projectAndWrite(path: String, vds: VariantDataset, optYExpr: Option[String], covExpr: Array[String], useDosages: Boolean) {
+    val yExpr = optYExpr.getOrElse("0")
+    val (_, _, completeSamples) = RegressionUtils.getPhenoCovCompleteSamples(vds, yExpr, covExpr)
+    val completeSamplesSet = completeSamples.toSet
+    val sampleMask = vds.sampleIds.map(completeSamplesSet).toArray
+    val completeSampleIndex = (0 until vds.nSamples).filter(sampleMask).toArray
+
+    if (!completeSamples.sameElements(rowIds))
+      fatal("Complete samples in the dataset must coincide with rows IDs of eigenvectors, in the same order.")
+    
+    val dm = DistributedMatrix[BlockMatrix]
+    import dm.ops._
+
+    val G = ToIndexedRowMatrix(vds, useDosages, sampleMask, completeSampleIndex)
+    val projG = G.toBlockMatrixDense() * evects
+        
+    dm.write(projG, path)
   }
 }

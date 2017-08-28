@@ -59,6 +59,9 @@ class Eigen:
     @typecheck_method(k=integral)
     def take_top(self, k):
         """Take the top k eigenvectors and eigenvalues.
+        
+       **Notes** 
+       
         If k is greater than or equal to the number present, then the calling eigendecomposition is returned.
 
         :param int k: Number of eigenvectors and eigenvalues to return.
@@ -68,6 +71,24 @@ class Eigen:
         """
         
         return Eigen(self._jeigen.takeTop(k))
+    
+    @typecheck_method(proportion=numeric)
+    def drop_small(self, proportion = 1e-6):
+        """Drop the maximum number of eigenvectors without losing more than ``proportion`` of the total variance (sum of
+        eigenvalues).
+        
+        **Notes**
+        
+        For example, if the eigenvalues are [1.0, 2.0, 97.0] then the proportions 0.01, 0.02, and 0.03 will
+        drop 1, 1, and 2 eigenvectors, respectively.
+
+        :param float proportion: Proportion in the interval [0,1)
+
+        :return: Eigendecomposition
+        :rtype: :py:class:`.Eigen`
+        """
+        
+        return Eigen(self._jeigen.dropSmall(proportion))
     
     def distribute(self):
         """Convert to a distributed eigendecomposition.
@@ -241,6 +262,19 @@ class EigenDistributed:
         :rtype: int
         """
         return self._jeigen.nEvects()
+    
+    @typecheck_method(path=strlike,
+                      vds=anytype,
+                      y=nullable(strlike),
+                      covariates=listof(strlike),
+                      use_dosages=bool)
+    def project_and_write(self, path, vds, y=None, covariates=[], use_dosages=False):
+        """Project complete samples of vds using eigenvectors and write to disk.
+        
+        >>> eig = vds.rrm().eigen().distribute()
+        >>> eig.project_and_write('output/example.proj', vds)
+        """
+        return self._jeigen.projectAndWrite(path, vds._jvds, joption(y), jarray(Env.jvm().java.lang.String, covariates), use_dosages)
     
     @typecheck_method(path=strlike)
     def write(self, path):

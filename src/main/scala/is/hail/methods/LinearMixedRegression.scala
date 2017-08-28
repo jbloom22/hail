@@ -266,24 +266,6 @@ object LinearMixedRegression {
   def multiply(bm: BlockMatrix, m: DenseMatrix[Double]): DenseMatrix[Double] =
     (bm * m.asSpark()).toLocalMatrix().asBreeze().asInstanceOf[DenseMatrix[Double]]
   
-  // FIXME need to verify dosages same
-  def writeProjection(path: String, vds: VariantDataset, eigenDist: EigenDistributed, yExpr: String, covExpr: Array[String], useDosages: Boolean) {
-    val (_, _, completeSamples) = RegressionUtils.getPhenoCovCompleteSamples(vds, yExpr, covExpr)
-    val completeSamplesSet = completeSamples.toSet
-    val sampleMask = vds.sampleIds.map(completeSamplesSet).toArray
-    val completeSampleIndex = (0 until vds.nSamples).filter(sampleMask).toArray
-
-    val EigenDistributed(_, rowIds, evects, evals) = eigenDist
-
-    if (!completeSamples.sameElements(rowIds))
-      fatal("Complete samples in the dataset must coincide with rows IDs of eigenvectors, in the same order.")
-    
-    val G = ToIndexedRowMatrix(vds, useDosages, sampleMask, completeSampleIndex)
-    val projG = G.toBlockMatrixDense() * evects
-    
-    dm.write(projG, path)
-  }
-  
   def applyEigenDistributed(
     vds: VariantDataset,
     eigenDist: EigenDistributed,
