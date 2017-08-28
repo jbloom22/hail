@@ -266,6 +266,7 @@ object LinearMixedRegression {
   def multiply(bm: BlockMatrix, m: DenseMatrix[Double]): DenseMatrix[Double] =
     (bm * m.asSpark()).toLocalMatrix().asBreeze().asInstanceOf[DenseMatrix[Double]]
   
+  // FIXME need to verify dosages same
   def writeProjection(path: String, vds: VariantDataset, eigenDist: EigenDistributed, yExpr: String, covExpr: Array[String], useDosages: Boolean) {
     val (_, _, completeSamples) = RegressionUtils.getPhenoCovCompleteSamples(vds, yExpr, covExpr)
     val completeSamplesSet = completeSamples.toSet

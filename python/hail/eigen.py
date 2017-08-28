@@ -178,7 +178,7 @@ class Eigen:
     def read(path):
         """Reads the eigendecomposition from a path.
 
-        >>>  eig = Eigen.read('data/example.eig')
+        >>> eig = Eigen.read('data/example.eig')
 
         :param str path: path to directory ending in ``.eig`` from which to read the LD matrix
         
