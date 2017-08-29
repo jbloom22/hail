@@ -73,14 +73,16 @@ class Eigen:
         return Eigen(self._jeigen.takeTop(k))
     
     @typecheck_method(proportion=numeric)
-    def drop_small(self, proportion = 1e-6):
-        """Drop the maximum number of eigenvectors without losing more than ``proportion`` of the total variance (sum of
-        eigenvalues).
+    def drop_proportion(self, proportion = 1e-6):
+        """Drop the maximum number of eigenvectors without cumulatively exceeding the given proportion of
+        the total variance.
         
         **Notes**
         
-        For example, if the eigenvalues are [1.0, 2.0, 97.0] then the proportions 0.01, 0.02, and 0.03 will
-        drop 1, 1, and 2 eigenvectors, respectively.
+        The total variance is the sum of all eigenvalues.
+        
+        For example, if the eigenvalues are [0.0, 1.0, 2.0, 97.0] then the proportions 0.0, 0.01, 0.02, and 0.03 will
+        drop 1, 2, 2, and 3 eigenvectors, respectively.
 
         :param float proportion: Proportion in the interval [0,1)
 
@@ -88,7 +90,24 @@ class Eigen:
         :rtype: :py:class:`.Eigen`
         """
         
-        return Eigen(self._jeigen.dropSmall(proportion))
+        return Eigen(self._jeigen.dropProportion(proportion))
+
+    @typecheck_method(threshold=numeric)
+    def drop_threshold(self, threshold=1e-6):
+        """Drop eigenvectors with eigenvalues at or below the threshold.
+        
+        **Notes**
+        
+        For example, if the eigenvalues are [0.0, 1.0, 2.0, 97.0] then the thresholds 0.0, 0.01, 0.02, and 0.03 will
+        drop 1, 2, 3, and 3 eigenvectors, respectively.
+
+        :param float threshold: Non-negative threshold 
+
+        :return: Eigendecomposition
+        :rtype: :py:class:`.Eigen`
+        """
+        
+        return Eigen(self._jeigen.dropThreshold(threshold))
     
     def distribute(self):
         """Convert to a distributed eigendecomposition.

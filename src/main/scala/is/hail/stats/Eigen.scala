@@ -159,7 +159,7 @@ case class Eigen(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMat
         evects(::, (nEvects - k) until nEvects).copy, evals((nEvects - k) until nEvects).copy)
   }
 
-  def dropSmall(proportion: Double = 1e-6): Eigen = {
+  def dropProportion(proportion: Double = 1e-6): Eigen = {
     if (proportion < 0 || proportion >= 1)
       fatal(s"Relative threshold must be in range [0,1), got $proportion")
 
@@ -171,9 +171,21 @@ case class Eigen(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMat
       i += 1
     }
     
-    info(s"Dropping $i eigenvectors, leaving ${nEvects - i} of $nEvects")
+    info(s"Dropping $i eigenvectors, leaving ${nEvects - i} of the original $nEvects")
     
     Eigen(rowSignature, rowIds, evects(::, i until nEvects).copy, evals(i until nEvects).copy)
+  }
+  
+  def dropThreshold(threshold: Double = 1e-6): Eigen = {
+    if (threshold < 0)
+      fatal(s"Threshold must be non-negative, got $threshold")
+
+    val newEvals = DenseVector(evals.toArray.dropWhile(_ <= threshold))
+    val k = newEvals.length
+
+    info(s"Dropping ${nEvects - k} eigenvectors with eigenvalues below $threshold, leaving $k of the original $nEvects")
+    
+    Eigen(rowSignature, rowIds, evects(::, (nEvects - k) until nEvects).copy, newEvals)
   }
   
   def evectsSpark(): linalg.DenseMatrix = new linalg.DenseMatrix(evects.rows, evects.cols, evects.data, evects.isTranspose)
@@ -188,6 +200,11 @@ case class Eigen(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMat
   def toEigenDistributedRRM(vds: VariantDataset, nSamplesInLDMatrix: Int): EigenDistributed = {
     if (rowSignature != TVariant)
       fatal(s"Rows must have type TVariant, got $rowSignature")
+    
+//    if (evals(0) <= 1e-6)
+//      this.dropThreshold().toEigenDistributedRRM(vds, nSamplesInLDMatrix)
+    if (evals(0) < 1e-6)
+      fatal(s"Use drop_threshold() to drop eigenvectors with eigenvalues below 1e-6, found eigenvalue ${evals(0)}")
 
     val variants = rowIds.map(_.asInstanceOf[Variant])    
     val variantSet = variants.toSet
