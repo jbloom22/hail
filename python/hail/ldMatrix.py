@@ -31,6 +31,13 @@ class LDMatrix:
 
         return IndexedRowMatrix(self._jldm.matrix())
 
+    def num_samples(self):
+        """
+        Number of samples used to form the LD matrix.
+        """
+        
+        return self._jldm.nSamples()
+
     def to_local_matrix(self):
         """
         Converts the LD matrix to a local Spark matrix.
