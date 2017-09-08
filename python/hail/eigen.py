@@ -143,6 +143,22 @@ class Eigen:
 
         jeigen = Env.hail().stats.Eigen.read(Env.hc()._jhc, path)
         return Eigen(jeigen)
+    
+    @typecheck_method(vds=anytype,
+                      num_samples_in_ld_matrix=integral)
+    def to_eigen_distributed_rrm(self, vds, num_samples_in_ld_matrix):
+        """Compute eigendecomposition of the RRM from eigendecomposition of LD matrix.
+        
+        :param vds: Variant dataset
+        :type vds: :py:class:`.VariantDataset`
+        
+        :param int num_samples_in_ld_matrix: Number of samples used to form the LD matrix.
+        
+        :return: Distributed eigendecomposition of the realized relationship matrix.
+        :rtype: :py:class:`.EigenDistributed`
+        """
+        
+        return EigenDistributed(self._jeigen.toEigenDistributedRRM(vds._jvds, joption(num_samples_in_ld_matrix)))
 
 class EigenDistributed:
     """
