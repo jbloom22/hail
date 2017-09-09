@@ -12,6 +12,7 @@ from hail.representation import Interval, Pedigree, Variant
 from hail.utils import Summary, wrap_to_list, hadoop_read
 from hail.kinshipMatrix import KinshipMatrix
 from hail.ldMatrix import LDMatrix
+from hail.eigen import EigenDistributed
 
 warnings.filterwarnings(module=__name__, action='once')
 
@@ -3041,7 +3042,7 @@ class VariantDataset(object):
 
         :param bool use_dosages: If true, use dosage genotypes rather than hard call genotypes.
 
-        :param int variant_block_size: Number of variant regressions to perform simultaneously.  Larger block size requires more memmory.
+        :param int variant_block_size: Number of variant regressions to perform simultaneously.  Larger block size requires more memory.
 
         :return: Variant dataset with linear regression variant annotations.
         :rtype: :py:class:`.VariantDataset`
@@ -3065,10 +3066,11 @@ class VariantDataset(object):
                       sparsity_threshold=numeric,
                       use_dosages=bool,
                       n_eigs=nullable(integral),
-                      dropped_variance_fraction=(nullable(float)))
+                      dropped_variance_fraction=nullable(float),
+                      variant_block_size=integral)
     def lmmreg(self, kinshipMatrix, y, covariates=[], global_root="global.lmmreg", va_root="va.lmmreg",
                run_assoc=True, use_ml=False, delta=None, sparsity_threshold=1.0, use_dosages=False,
-               n_eigs=None, dropped_variance_fraction=None):
+               n_eigs=None, dropped_variance_fraction=None, variant_block_size=16):
         """Use a kinship-based linear mixed model to estimate the genetic component of phenotypic variance (narrow-sense heritability) and optionally test each variant for association.
 
         .. include:: requireTGenotype.rst
@@ -3289,13 +3291,15 @@ class VariantDataset(object):
         :param delta: Fixed delta value to use in the global model, overrides fitting delta.
         :type delta: float or None
 
-        :param float sparsity_threshold: Genotype vector sparsity at or below which to use sparse genotype vector in rotation (advanced).
+        :param float sparsity_threshold: Deprecated advanced feature, no effect on output.
 
         :param bool use_dosages: If true, use dosages rather than hard call genotypes.
 
         :param int n_eigs: Number of eigenvectors of the kinship matrix used to fit the model.
 
         :param float dropped_variance_fraction: Upper bound on fraction of sample variance lost by dropping eigenvectors with small eigenvalues.
+        
+        :param int variant_block_size: Number of variant regressions to perform simultaneously.  Larger block size requires more memory.
 
         :return: Variant dataset with linear mixed regression annotations.
         :rtype: :py:class:`.VariantDataset`
@@ -3303,7 +3307,47 @@ class VariantDataset(object):
 
         jvds = self._jvdf.lmmreg(kinshipMatrix._jkm, y, jarray(Env.jvm().java.lang.String, covariates),
                                  use_ml, global_root, va_root, run_assoc, joption(delta), sparsity_threshold,
-                                 use_dosages, joption(n_eigs), joption(dropped_variance_fraction))
+                                 use_dosages, joption(n_eigs), joption(dropped_variance_fraction), variant_block_size)
+        return VariantDataset(self.hc, jvds)
+
+    @handle_py4j
+    @requireTGenotype
+    @typecheck_method(eigen_distributed=EigenDistributed,
+                      y=strlike,
+                      covariates=listof(strlike),
+                      global_root=strlike,
+                      va_root=strlike,
+                      run_assoc=bool,
+                      use_ml=bool,
+                      delta=nullable(numeric),
+                      use_dosages=bool,
+                      path_to_projection=nullable(strlike),
+                      variant_block_size=integral)
+    def lmmreg_eigen_distributed(self, eigen_distributed, y, covariates=[], global_root="global.lmmreg",
+                                 va_root="va.lmmreg", run_assoc=True, use_ml=False, delta=None, use_dosages=False, 
+                                 path_to_projection=None, variant_block_size=16):
+        """Use a kinship-based linear mixed model to estimate the genetic component of phenotypic variance (narrow-sense heritability) and optionally test each variant for association. This method is more scalable than :py:meth:`~hail.VariantDataset.lmmreg`.
+
+        .. include:: requireTGenotype.rst
+        
+        >>> vds1 = hc.read("data/example_lmmreg.vds")
+        >>> rrm = vds1.filter_variants_expr('va.useInKinship').rrm()
+        >>> eig = rrm.eigen().distribute()
+        >>> lmm_vds = vds1.lmmreg_eigen_distributed(eig, 'sa.pheno', ['sa.cov1', 'sa.cov2'])
+
+        Equivalent to:
+
+        >>> vds1 = hc.read("data/example_lmmreg.vds")
+        >>> ld = vds1.filter_variants_expr('va.useInKinship').ld_matrix()
+        >>> eig = ld.eigen().to_eigen_distributed_rrm(vds1, ld.num_samples())
+        >>> lmm_vds = vds1.lmmreg_eigen_distributed(eig, 'sa.pheno', ['sa.cov1', 'sa.cov2'])
+        
+        """
+        
+        jvds = self._jvdf.lmmregEigenDistributed(eigen_distributed._jeigen, y,
+                                                 jarray(Env.jvm().java.lang.String, covariates), use_ml, global_root,
+                                                 va_root, run_assoc, joption(delta), use_dosages, 
+                                                 joption(path_to_projection), variant_block_size)
         return VariantDataset(self.hc, jvds)
 
     @handle_py4j

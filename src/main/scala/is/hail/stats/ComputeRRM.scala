@@ -95,6 +95,21 @@ object ToNormalizedIndexedRowMatrix {
   }
 }
 
+// pass in optNVariants if known to avoid count
+object ToIndexedRowMatrix {
+  def apply(vds: VariantDataset, useDosage: Boolean, sampleMask: Array[Boolean], completeSampleIndex: Array[Int], optNVariants: Option[Long] = None): IndexedRowMatrix = {
+    require(vds.wasSplit)
+    val n = completeSampleIndex.length
+    val m = optNVariants.getOrElse(vds.countVariants())
+    val indexedRows = 
+      if (!useDosage)
+        vds.rdd.zipWithIndex().map { case ((_, (_, gs)), i) => IndexedRow(i, Vectors.dense(RegressionUtils.hardCalls(gs, n, sampleMask).toArray)) } // FIXME: handle sparse?
+      else
+        vds.rdd.zipWithIndex().map { case ((_, (_, gs)), i) => IndexedRow(i, Vectors.dense(RegressionUtils.dosages(gs, completeSampleIndex).toArray)) }
+    new IndexedRowMatrix(indexedRows, m, n)
+  }
+}
+
 // each row has mean 0, norm approx sqrt(n), variance approx 1, constant variants are included as zero vector
 object ToHWENormalizedIndexedRowMatrix {
   def apply(vds: VariantDataset): (Array[Variant], IndexedRowMatrix) = {
