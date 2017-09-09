@@ -25,14 +25,16 @@ object LDMatrix {
 
     val filteredNormalizedHardCalls = vds.rdd.flatMap { 
       case (v, (_, gs)) => RegressionUtils.normalizedHardCalls(gs, nSamples).map(x => (v, x))
-    }
+    }.persist()
     
     val variantsKept = filteredNormalizedHardCalls.map(_._1).collect()
     assert(variantsKept.isSorted, "ld_matrix: Array of variants is not sorted. This is a bug")
-
+    
     val normalizedIndexedRows = filteredNormalizedHardCalls.map(_._2).zipWithIndex()
-      .map{ case (values, idx) => IndexedRow(idx, Vectors.dense(values))}
+      .map{ case (vec, idx) => IndexedRow(idx, Vectors.dense(vec))}
     val normalizedBlockMatrix = new IndexedRowMatrix(normalizedIndexedRows).toBlockMatrixDense()
+
+    filteredNormalizedHardCalls.unpersist()
 
     val nVariantsKept = variantsKept.length
     val nVariantsDropped = nVariants - nVariantsKept
@@ -62,7 +64,7 @@ object LDMatrix {
     }
 
     val scaledIndexedRowMatrix = new IndexedRowMatrix(indexedRowMatrix.rows
-      .map{case IndexedRow(idx, vals) => IndexedRow(idx, vals.map(d => d * nSamplesInverse))})
+      .map{case IndexedRow(idx, vec) => IndexedRow(idx, vec * nSamplesInverse)})
 
     LDMatrix(scaledIndexedRowMatrix, variantsKept, nSamples)
   }
