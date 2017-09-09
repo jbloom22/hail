@@ -201,16 +201,16 @@ case class Eigen(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMat
     val dm = DistributedMatrix[BlockMatrix]
     import dm.ops._
 
-    // G = (n x m) matrix, consisting of rows of n=nUsedToNormalize x m matrix with columns of mean 0 and variance 1
+    // G = (n x m) matrix, consisting of rows of n=nSamplesUsedToNormalize x m matrix with columns of mean 0 and variance 1
     // G = U * sqrt(S) * V.t is SVD
     // L = 1 / n0 * G.t * G = V * S_L * V.t, S_L = S / n
     // K = 1 / m * G * G.t = U * S_K * U.t, S_K = S / m
     // U = G * V * inv(sqrt(S_L * n))
     // S_K = S_L * n / m
     // Here G0 is an (n0 x m) matrix consisting of a subset of rows of G and U0 consists of the corresponding subset of rows of U.
-    // If G0 has fewer rows than G, then set nUsedToNormalize to Some(n).
-    def normalizedRightEigenToLeftEigen(G0: BlockMatrix, V: DenseMatrix[Double], S_L: DenseVector[Double], nUsedToNormalize: Option[Int] = None): (BlockMatrix, DenseVector[Double]) = { 
-      val n0 = nUsedToNormalize.getOrElse(G0.numRows().toInt)
+    // If G0 has fewer rows than G, then set nSamplesUsedToNormalize to Some(n).
+    def normalizedRightEigenToLeftEigen(G0: BlockMatrix, V: DenseMatrix[Double], S_L: DenseVector[Double], nSamplesUsedToNormalize: Option[Int] = None): (BlockMatrix, DenseVector[Double]) = { 
+      val n0 = nSamplesUsedToNormalize.getOrElse(G0.numRows().toInt)
       val m = V.rows
       val sqrtSInv = S_L.map(e => 1 / math.sqrt(e * n0))
       
@@ -226,13 +226,14 @@ case class Eigen(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMat
    // if (evals(0) < 1e-6)
    //   fatal(s"Use drop_threshold() to drop eigenvectors with eigenvalues below 1e-6, found eigenvalue ${evals(0)}")
 
-    val variants = rowIds.map(_.asInstanceOf[Variant])    
+    val variants = rowIds.map(_.asInstanceOf[Variant])   
     val variantSet = variants.toSet
+    val variantSetBc = vds.sparkContext.broadcast(variantSet)
     val nEigs = evals.length
     
     info(s"Transforming $nEigs variant eigenvectors to sample eigenvectors...")
         
-    val filteredVDS = vds.filterVariants((v, _, _) => variantSet(v)).persist()
+    val filteredVDS = vds.filterVariants((v, _, _) => variantSetBc.value(v)).persist()
     require(filteredVDS.variants.count() == variantSet.size, "Some variants in LD matrix eigendecomposition are missing from VDS")
     
     val G = ToNormalizedIndexedRowMatrix(filteredVDS).toBlockMatrixDense().t
