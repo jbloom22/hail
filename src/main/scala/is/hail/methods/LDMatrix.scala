@@ -92,7 +92,8 @@ object LDMatrix {
         jackson.Serialization.read[LDMatrixMetadata](isr)
       }
 
-    new LDMatrix(new IndexedRowMatrix(rdd), variants, nSamples)
+    val nVariants = variants.length
+    new LDMatrix(new IndexedRowMatrix(rdd, nVariants, nVariants), variants, nSamples)
   }
 }
 
