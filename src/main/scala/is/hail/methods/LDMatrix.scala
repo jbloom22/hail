@@ -21,7 +21,7 @@ object LDMatrix {
     */
   def apply(vds : VariantDataset, optComputeLocally: Option[Boolean]): LDMatrix = {
     val nSamples = vds.nSamples
-    val nVariants = vds.countVariants()
+    // val nVariants = vds.countVariants()
 
     val filteredNormalizedHardCalls = vds.rdd.flatMap { 
       case (v, (_, gs)) => RegressionUtils.normalizedHardCalls(gs, nSamples).map(x => (v, x))
@@ -45,12 +45,12 @@ object LDMatrix {
     filteredNormalizedHardCalls.unpersist()
 
     val nVariantsKept = variantsKept.length
-    val nVariantsDropped = nVariants - nVariantsKept
+    // val nVariantsDropped = nVariants - nVariantsKept
 
-    info(s"Computing LD matrix with ${variantsKept.length} variants using $nSamples samples. $nVariantsDropped variants were dropped.")
+    info(s"Computing LD matrix with $nVariantsKept variants using $nSamples samples.") // $nVariantsDropped variants were dropped.")
 
     val localBound = 5000 * 5000
-    val nEntries: Long = nVariantsKept * nVariantsKept
+    val nEntries: Long = nSamples * nVariantsKept
     val nSamplesInverse = 1.0 / nSamples
 
     val computeLocally = optComputeLocally.getOrElse(nEntries <= localBound)
