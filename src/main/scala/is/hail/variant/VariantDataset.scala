@@ -12,7 +12,7 @@ import is.hail.io.vcf.{BufferedLineIterator, ExportVCF}
 import is.hail.keytable.KeyTable
 import is.hail.methods._
 import is.hail.sparkextras.{OrderedPartitioner, OrderedRDD}
-import is.hail.stats.ComputeRRM
+import is.hail.stats.{ComputeRRM, Eigen, EigenDistributed}
 import is.hail.utils._
 import is.hail.variant.Variant.orderedKey
 import org.apache.hadoop
@@ -592,14 +592,50 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
     rootVA: String = "va.lmmreg",
     runAssoc: Boolean = true,
     delta: Option[Double] = None,
-    sparsityThreshold: Double = 1.0,
+    sparsityThreshold: Double = 1.0, // deprecated
     useDosages: Boolean = false,
     nEigs: Option[Int] = None,
-    optDroppedVarianceFraction: Option[Double] = None): VariantDataset = {
+    optDroppedVarianceFraction: Option[Double] = None,
+    blockSize: Int = 16): VariantDataset = {
 
     requireSplit("linear mixed regression")
     LinearMixedRegression(vds, kinshipMatrix, y, covariates, useML, rootGA, rootVA,
-      runAssoc, delta, sparsityThreshold, useDosages, nEigs, optDroppedVarianceFraction)
+      runAssoc, delta, useDosages, nEigs, optDroppedVarianceFraction, blockSize)
+  }
+  
+  // FIXME: currently used in test but exposed in python, consider deleting
+  def lmmregEigen(eigen: Eigen,
+    y: String,
+    covariates: Array[String] = Array.empty[String],
+    useML: Boolean = false,
+    rootGA: String = "global.lmmreg",
+    rootVA: String = "va.lmmreg",
+    runAssoc: Boolean = true,
+    delta: Option[Double] = None,
+    useDosages: Boolean = false,
+    optDroppedVarianceFraction: Option[Double] = None,
+    blockSize: Int = 16): VariantDataset = {
+
+    requireSplit("linear mixed regression")
+    LinearMixedRegression.applyEigen(vds, eigen, y, covariates, useML, rootGA, rootVA,
+      runAssoc, delta, useDosages, optDroppedVarianceFraction, blockSize)
+  }
+  
+  def lmmregEigenDistributed(eigenDist: EigenDistributed,
+    y: String,
+    covariates: Array[String] = Array.empty[String],
+    useML: Boolean = false,
+    rootGA: String = "global.lmmreg",
+    rootVA: String = "va.lmmreg",
+    runAssoc: Boolean = true,
+    delta: Option[Double] = None,
+    useDosages: Boolean = false,
+    pathToProjection: Option[String] = None,
+    blockSize: Int = 128): VariantDataset = {
+
+    requireSplit("linear mixed regression")
+    LinearMixedRegression.applyEigenDistributed(vds, eigenDist, y, covariates, useML, rootGA, rootVA,
+      runAssoc, delta, useDosages, pathToProjection: Option[String], blockSize)
   }
 
   def logreg(test: String,

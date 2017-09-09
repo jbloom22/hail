@@ -5,15 +5,20 @@ import breeze.numerics.{sigmoid, sqrt}
 import is.hail.annotations._
 import is.hail.expr._
 import is.hail.stats._
-import is.hail.stats.eigSymD.DenseEigSymD
 import is.hail.utils._
 import is.hail.variant.VariantDataset
-
 import org.apache.commons.math3.analysis.UnivariateFunction
 import org.apache.commons.math3.optim.MaxEval
 import org.apache.commons.math3.optim.nonlinear.scalar.GoalType
 import org.apache.commons.math3.optim.univariate.{BrentOptimizer, SearchInterval, UnivariateObjectiveFunction}
 import org.apache.commons.math3.util.FastMath
+import is.hail.distributedmatrix.DistributedMatrix
+import is.hail.distributedmatrix.DistributedMatrix.implicits._
+import org.apache.spark.mllib.linalg.distributed.{BlockMatrix, IndexedRow}
+import org.apache.spark.mllib.linalg.{DenseMatrix => SparkDenseMatrix}
+import is.hail.sparkextras.{OrderedKey, OrderedPartitioner, OrderedRDD}
+
+import scala.reflect.ClassTag
 
 object LinearMixedRegression {
   val schema: Type = TStruct(
@@ -23,7 +28,7 @@ object LinearMixedRegression {
     ("pval", TDouble))
 
   def apply(
-    assocVds: VariantDataset,
+    vds: VariantDataset,
     kinshipMatrix: KinshipMatrix,
     yExpr: String,
     covExpr: Array[String],
@@ -32,81 +37,197 @@ object LinearMixedRegression {
     rootVA: String,
     runAssoc: Boolean,
     optDelta: Option[Double],
-    sparsityThreshold: Double,
     useDosages: Boolean,
     optNEigs: Option[Int],
-    optDroppedVarianceFraction: Option[Double]): VariantDataset = {
+    optDroppedVarianceFraction: Option[Double],
+    blockSize: Int): VariantDataset = {
 
-    require(assocVds.wasSplit)
+    val nEigs = optNEigs.getOrElse(kinshipMatrix.sampleIds.length)
+    var eigen = kinshipMatrix.eigen()
+    optDroppedVarianceFraction.foreach(p => eigen = eigen.dropProportion(p))
+    eigen = eigen.takeTop(nEigs)
+    
+    applyEigen(vds, eigen, yExpr, covExpr, useML, rootGA, rootVA, runAssoc, optDelta, useDosages, optDroppedVarianceFraction, blockSize)
+  }
+
+  def applyEigen(
+    vds: VariantDataset,
+    eigen: Eigen,
+    yExpr: String,
+    covExpr: Array[String],
+    useML: Boolean,
+    rootGA: String,
+    rootVA: String,
+    runAssoc: Boolean,
+    optDelta: Option[Double],
+    useDosages: Boolean,
+    optDroppedVarianceFraction: Option[Double],
+    blockSize: Int): VariantDataset = {
+
+    require(vds.wasSplit)
 
     val pathVA = Parser.parseAnnotationRoot(rootVA, Annotation.VARIANT_HEAD)
     Parser.validateAnnotationRoot(rootGA, Annotation.GLOBAL_HEAD)
 
-    val (y, cov, completeSamples) = RegressionUtils.getPhenoCovCompleteSamples(assocVds, yExpr, covExpr)
+    val (y, cov, completeSamples) = RegressionUtils.getPhenoCovCompleteSamples(vds, yExpr, covExpr)
+    val C = cov
     val completeSamplesSet = completeSamples.toSet
-    val sampleMask = assocVds.sampleIds.map(completeSamplesSet).toArray
-    val completeSampleIndex = (0 until assocVds.nSamples)
-      .filter(i => completeSamplesSet(assocVds.sampleIds(i)))
-      .toArray
 
     optDelta.foreach(delta =>
       if (delta <= 0d)
         fatal(s"delta must be positive, got ${ delta }"))
 
-    val covNames = "intercept" +: covExpr
-
-    val filteredKinshipMatrix = if (kinshipMatrix.sampleIds sameElements completeSamples)
-      kinshipMatrix
-    else {
-      val fkm = kinshipMatrix.filterSamples(completeSamplesSet)
-      if (!(fkm.sampleIds sameElements completeSamples))
-        fatal("Array of sample IDs in assoc_vds and array of sample IDs in kinship_matrix (with both filtered to complete " +
-          "samples in assoc_vds) do not agree. This should not happen when kinship_matrix is computed from a filtered version of assoc_vds.")
-      fkm
-    }
-
     val n = y.length
-    val k = cov.cols
-    val d = n - k - 1
+    val c = C.cols
+    val d = n - c - 1
 
     if (d < 1)
-      fatal(s"$n samples and $k ${ plural(k, "covariate") } including intercept implies $d degrees of freedom.")
+      fatal(s"lmmreg: $n samples and $c ${ plural(c, "covariate") } including intercept implies $d degrees of freedom.")
 
-    info(s"lmmreg: running lmmreg on $n samples with $k sample ${ plural(k, "covariate") } including intercept...")
-
-    val K = new DenseMatrix[Double](n, n, filteredKinshipMatrix.matrix.toBlockMatrixDense().toLocalMatrix().toArray)
-
-    info(s"lmmreg: Computing eigendecomposition of kinship matrix...")
-
-    val eigK = eigSymD(K)
-    val fullU = eigK.eigenvectors
-    val fullS = eigK.eigenvalues // increasing order
+    info(s"lmmreg: Running lmmreg on $n samples with $c sample ${ plural(c, "covariate") } including intercept...")
 
     optDelta match {
-      case Some(_) => info(s"lmmreg: Delta specified by user")
+      case Some(del) => info(s"lmmreg: Delta of $del specified by user")
       case None => info(s"lmmreg: Estimating delta using ${ if (useML) "ML" else "REML" }... ")
     }
 
-    val nEigs = (optNEigs, optDroppedVarianceFraction) match {
-      case (Some(e), Some(dvf)) => e min computeNEigsDVF(fullS, dvf)
-      case (Some(e), None) => e
-      case (None, Some(dvf)) => computeNEigsDVF(fullS, dvf)
-      case (None, None) => n
-    }
+    val Eigen(_, rowIds, evects, evals) = eigen.filterRows(vds.sSignature, completeSamplesSet)
+    
+    if (!completeSamples.sameElements(rowIds))
+      fatal("Complete samples in the dataset must all be coordinates of the eigenvectors, and in the same order.")
 
-    require(nEigs > 0 && nEigs <= n, s"lmmreg: number of kinship eigenvectors to use must be between 1 and the number of samples $n inclusive: got $nEigs")
+    val nFiltered = rowIds.length - completeSamples.length
+    if (nFiltered > 0)
+      info(s"lmmreg: Filtered $nFiltered coordinates from each eigenvector, as the corresponding samples were not complete samples in the dataset.")
 
-    val Ut = fullU(::, (n - nEigs) until n).t
-    val S = fullS((n - nEigs) until n)
+    val Ut = evects.t
+    val S = evals
+    val nEigs = S.length
 
-    info(s"lmmreg: Evals 1 to ${math.min(20, nEigs)}: " + ((nEigs - 1) to math.max(0, nEigs - 20) by -1).map(S(_).formatted("%.5f")).mkString(", "))
-    info(s"lmmreg: Evals $nEigs to ${math.max(1, nEigs - 20)}: " + (0 until math.min(nEigs, 20)).map(S(_).formatted("%.5f")).mkString(", "))
+    info(s"lmmreg: Using $nEigs")
+    info(s"lmmreg: Evals 1 to ${ math.min(20, nEigs) }: " + ((nEigs - 1) to math.max(0, nEigs - 20) by -1).map(S(_).formatted("%.5f")).mkString(", "))
+    info(s"lmmreg: Evals $nEigs to ${ math.max(1, nEigs - 20) }: " + (0 until math.min(nEigs, 20)).map(S(_).formatted("%.5f")).mkString(", "))
 
-    val lmmConstants = LMMConstants(y, cov, S, Ut)
+    val UtC = Ut * C
+    val Uty = Ut * y
+    val CtC = C.t * C
+    val Cty = C.t * y
+    val yty = y.t * y
+
+    val lmmConstants = LMMConstants(y, C, S, Uty, UtC, Cty, CtC, yty, n, c)
 
     val diagLMM = DiagLMM(lmmConstants, optDelta, useML)
 
+    val vds1 = globalFit(vds, diagLMM, covExpr, nEigs, S, rootGA, useML, optDroppedVarianceFraction)
+
+    if (runAssoc) {
+      val sampleMask = vds.sampleIds.map(completeSamplesSet).toArray
+      val completeSampleIndex = (0 until vds.nSamples).filter(sampleMask).toArray
+
+      val sc = vds1.sparkContext
+      val sampleMaskBc = sc.broadcast(sampleMask)
+      val completeSampleIndexBc = sc.broadcast(completeSampleIndex)
+
+      val (newVAS, inserter) = vds1.insertVA(LinearMixedRegression.schema, pathVA)
+
+      info(s"lmmreg: Computing statistics for each variant...")
+
+      val blockSize = 128
+      val useFullRank = nEigs == n
+
+      val newRDD =
+        if (useFullRank) {
+          val Qt = qr.reduced.justQ(diagLMM.TC).t
+          val QtTy = Qt * diagLMM.Ty
+          val TyQtTy = (diagLMM.Ty dot diagLMM.Ty) - (QtTy dot QtTy)
+          val scalarLMM = new FullRankScalarLMM(diagLMM.Ty, diagLMM.TyTy, Qt, QtTy, TyQtTy, diagLMM.logNullS2, useML)
+          val projection = Ut(::, *) :* diagLMM.sqrtInvD
+
+          val scalarLMMBc = sc.broadcast(scalarLMM)
+          val projectionBc = sc.broadcast(projection)
+
+          vds1.rdd.mapPartitions({ it =>
+            val missingSamples = new ArrayBuilder[Int]
+
+            // columns are genotype vectors
+            var X: DenseMatrix[Double] = null
+
+            it.grouped(blockSize)
+              .flatMap(git => {
+                val block = git.toArray
+                val blockLength = block.length
+
+                if (X == null || X.cols != blockLength)
+                  X = new DenseMatrix[Double](n, blockLength)
+
+                var i = 0
+                while (i < blockLength) {
+                  val (_, (_, gs)) = block(i)
+
+                  if (useDosages)
+                    RegressionUtils.dosages(X(::, i), gs, completeSampleIndexBc.value, missingSamples)
+                  else
+                    X(::, i) := RegressionUtils.hardCalls(gs, n, sampleMaskBc.value) // No special treatment of constant
+
+                  i += 1
+                }
+
+                val annotations = scalarLMMBc.value.likelihoodRatioTestBlock(projectionBc.value * X)
+
+                (block, annotations).zipped.map { case ((v, (va, gs)), a) => (v, (inserter(va, a), gs)) }
+              })
+          }, preservesPartitioning = true)
+        } else {
+          val scalarLMM = LowRankScalarLMM(lmmConstants, diagLMM.delta, diagLMM.logNullS2, useML)
+          val scalarLMMBc = sc.broadcast(scalarLMM)
+          val UtBc = sc.broadcast(Ut)
+
+          vds1.rdd.mapPartitions({ it =>
+            val sclr = scalarLMMBc.value
+
+            val r1 = 1 to c
+
+            val CtC = DenseMatrix.zeros[Double](c + 1, c + 1)
+            CtC(r1, r1) := sclr.con.CtC
+
+            val UtC = DenseMatrix.zeros[Double](nEigs, c + 1)
+            UtC(::, r1) := sclr.con.UtC
+
+            val Cty = DenseVector.zeros[Double](c + 1)
+            Cty(r1) := sclr.con.Cty
+
+            val CzC = DenseMatrix.zeros[Double](c + 1, c + 1)
+            CzC(r1, r1) := sclr.UtcovZUtcov
+
+            val missingSamples = new ArrayBuilder[Int]
+            val x0 = DenseVector.zeros[Double](n)
+
+            it.map { case (v, (va, gs)) =>
+              val x: Vector[Double] =
+                if (useDosages) {
+                  RegressionUtils.dosages(x0, gs, completeSampleIndexBc.value, missingSamples)
+                  x0
+                } else
+                  RegressionUtils.hardCalls(gs, n, sampleMaskBc.value) // No special treatment of constant
+              
+              val annotation = sclr.likelihoodRatioTestLowRank(x, UtBc.value * x, CtC, UtC, Cty, CzC)
+
+              (v, (inserter(va, annotation), gs)) }
+          }, preservesPartitioning = true)
+        }
+
+      vds1.copy(
+        rdd = newRDD.asOrderedRDD,
+        vaSignature = newVAS)
+    } else
+      vds1
+  }
+
+  def globalFit(vds: VariantDataset, diagLMM: DiagLMM, covExpr: Array[String], nEigs: Int,
+    S: DenseVector[Double], rootGA: String, useML: Boolean, optDroppedVarianceFraction: Option[Double]): VariantDataset = {
+
     val delta = diagLMM.delta
+    val covNames = "intercept" +: covExpr
     val globalBetaMap = covNames.zip(diagLMM.globalB.toArray).toMap
     val globalSg2 = diagLMM.globalS2
     val globalSe2 = delta * globalSg2
@@ -122,175 +243,250 @@ object LinearMixedRegression {
     info(s"lmmreg: global model fit: delta = $delta")
     info(s"lmmreg: global model fit: h2 = $h2")
 
-    diagLMM.optGlobalFit.foreach { gf =>
-      info(s"lmmreg: global model fit: seH2 = ${ gf.sigmaH2 }")
-    }
+    diagLMM.optGlobalFit.foreach { gf => info(s"lmmreg: global model fit: seH2 = ${ gf.sigmaH2 }") }
 
-    val vds1 = assocVds.annotateGlobal(
-      Annotation(useML, globalBetaMap, globalSg2, globalSe2, delta, h2, fullS.data.reverse: IndexedSeq[Double], nEigs, optDroppedVarianceFraction.getOrElse(null)),
+    val vds1 = vds.annotateGlobal(
+      Annotation(useML, globalBetaMap, globalSg2, globalSe2, delta, h2, nEigs, optDroppedVarianceFraction.orNull),
       TStruct(("useML", TBoolean), ("beta", TDict(TString, TDouble)), ("sigmaG2", TDouble), ("sigmaE2", TDouble),
-        ("delta", TDouble), ("h2", TDouble), ("evals", TArray(TDouble)), ("nEigs", TInt), ("dropped_variance_fraction", TDouble)), rootGA)
+        ("delta", TDouble), ("h2", TDouble), ("nEigs", TInt), ("dropped_variance_fraction", TDouble)), rootGA)
 
-    val vds2 = diagLMM.optGlobalFit match {
+    diagLMM.optGlobalFit match {
       case Some(gf) =>
         val (logDeltaGrid, logLkhdVals) = gf.gridLogLkhd.unzip
         vds1.annotateGlobal(
           Annotation(gf.sigmaH2, gf.h2NormLkhd, gf.maxLogLkhd, logDeltaGrid, logLkhdVals),
           TStruct(("seH2", TDouble), ("normLkhdH2", TArray(TDouble)), ("maxLogLkhd", TDouble),
             ("logDeltaGrid", TArray(TDouble)), ("logLkhdVals", TArray(TDouble))), rootGA + ".fit")
-      case None =>
-        assert(optDelta.isDefined)
-        vds1
+      case None => vds1
+    }
+  }
+  
+  val dm = DistributedMatrix[BlockMatrix]
+  import dm.ops._
+
+  def multiply(bm: BlockMatrix, v: DenseVector[Double]): DenseVector[Double] =
+    DenseVector((bm * v.asDenseMatrix.t.asSpark()).toLocalMatrix().asInstanceOf[SparkDenseMatrix].values)
+
+  def multiply(bm: BlockMatrix, m: DenseMatrix[Double]): DenseMatrix[Double] =
+    (bm * m.asSpark()).toLocalMatrix().asBreeze().asInstanceOf[DenseMatrix[Double]]
+  
+  def applyEigenDistributed(
+    vds: VariantDataset,
+    eigenDist: EigenDistributed,
+    yExpr: String,
+    covExpr: Array[String],
+    useML: Boolean,
+    rootGA: String,
+    rootVA: String,
+    runAssoc: Boolean,
+    optDelta: Option[Double],
+    useDosages: Boolean,
+    pathToProjection: Option[String],
+    blockSize: Int): VariantDataset = {
+
+    require(vds.wasSplit)
+
+    val pathVA = Parser.parseAnnotationRoot(rootVA, Annotation.VARIANT_HEAD)
+    Parser.validateAnnotationRoot(rootGA, Annotation.GLOBAL_HEAD)
+
+    val (y, cov, completeSamples) = RegressionUtils.getPhenoCovCompleteSamples(vds, yExpr, covExpr)
+    val C = cov
+    val completeSamplesSet = completeSamples.toSet
+
+    optDelta.foreach(delta =>
+      if (delta <= 0d)
+        fatal(s"delta must be positive, got ${ delta }"))
+
+    val covNames = "intercept" +: covExpr
+
+    val n = y.length
+    val c = C.cols
+    val d = n - c - 1
+
+    if (d < 1)
+      fatal(s"lmmreg: $n samples and $c ${ plural(c, "covariate") } including intercept implies $d degrees of freedom.")
+
+    info(s"lmmreg: Running lmmreg on $n samples with $c sample ${ plural(c, "covariate") } including intercept...")
+
+    optDelta match {
+      case Some(del) => info(s"lmmreg: Delta of $del specified by user")
+      case None => info(s"lmmreg: Estimating delta using ${ if (useML) "ML" else "REML" }... ")
     }
 
-    if (runAssoc) {
-      val sc = assocVds.sparkContext
+    val EigenDistributed(_, rowIds, evects, evals) = eigenDist
+
+    if (!completeSamples.sameElements(rowIds))
+      fatal("Complete samples in the dataset must coincide with rows IDs of eigenvectors, in the same order.")
+    
+    val Ut = evects.t
+    val S = evals
+    val nEigs = S.length
+
+    info(s"lmmreg: Using $nEigs")
+    info(s"lmmreg: Evals 1 to ${ math.min(20, nEigs) }: " + ((nEigs - 1) to math.max(0, nEigs - 20) by -1).map(S(_).formatted("%.5f")).mkString(", "))
+    info(s"lmmreg: Evals $nEigs to ${ math.max(1, nEigs - 20) }: " + (0 until math.min(nEigs, 20)).map(S(_).formatted("%.5f")).mkString(", "))
+
+    val UtC = multiply(Ut, C)
+    val Uty = multiply(Ut, y)
+    val CtC = C.t * C
+    val Cty = C.t * y
+    val yty = y.t * y
+
+    val lmmConstants = LMMConstants(y, C, S, Uty, UtC, Cty, CtC, yty, n, c)
+
+    val diagLMM = DiagLMM(lmmConstants, optDelta, useML)
+
+    val vds1 = LinearMixedRegression.globalFit(vds, diagLMM, covExpr, nEigs, S, rootGA, useML, optDroppedVarianceFraction = None)
+
+    val vds2 = if (runAssoc) {
+      val sampleMask = vds.sampleIds.map(completeSamplesSet).toArray // FIXME
+      val completeSampleIndex = (0 until vds.nSamples).filter(sampleMask).toArray
+      
+      val sc = vds1.sparkContext
       val sampleMaskBc = sc.broadcast(sampleMask)
       val completeSampleIndexBc = sc.broadcast(completeSampleIndex)
 
-      val (newVAS, inserter) = vds2.insertVA(LinearMixedRegression.schema, pathVA)
+      val (newVAS, inserter) = vds1.insertVA(LinearMixedRegression.schema, pathVA)
 
       info(s"lmmreg: Computing statistics for each variant...")
 
-      val scalerLMM = if (nEigs == n) {
-        val T = Ut(::, *) :* diagLMM.sqrtInvD
-        val Qt = qr.reduced.justQ(diagLMM.TC).t
-        val QtTy = Qt * diagLMM.Ty
-        val TyQtTy = (diagLMM.Ty dot diagLMM.Ty) - (QtTy dot QtTy)
-        new FullRankScalerLMM(diagLMM.Ty, diagLMM.TyTy, Qt, QtTy, TyQtTy, T, diagLMM.logNullS2, useML)
-      }
-      else
-        new LowRankScalerLMM(lmmConstants, delta, diagLMM.logNullS2, useML)
-
-      val scalerLMMBc = sc.broadcast(scalerLMM)
-
-      vds2.mapAnnotations { case (v, va, gs) =>
-        val x: Vector[Double] =
-          if (!useDosages) {
-            val x0 = RegressionUtils.hardCalls(gs, n, sampleMaskBc.value)
-            if (x0.used <= sparsityThreshold * n) x0 else x0.toDenseVector
-          } else
-            RegressionUtils.dosages(gs, completeSampleIndexBc.value)
+      vds1.persist()
+      
+      def makeIntOrderedPartitioner(vds: VariantDataset): OrderedPartitioner[Int, Int] = {
+        val partitionSizes = vds.rdd.mapPartitions( it => Iterator(it.length), preservesPartitioning = true).collect()
+        val boundsPlus2 = partitionSizes.scanLeft(-1)(_ + _)
+        val bounds = boundsPlus2.slice(1, boundsPlus2.length - 1)
         
-        // TODO constant checking to be removed in 0.2
-        val nonConstant = useDosages || !RegressionUtils.constantVector(x)
+        val intOrderedKey = new OrderedKey[Int, Int] {
+          def project(key: Int): Int = key
+          def kOrd: Ordering[Int] = Ordering.Int
+          def pkOrd: Ordering[Int] = Ordering.Int
+          def kct: ClassTag[Int] = implicitly[ClassTag[Int]]
+          override def pkct: ClassTag[Int] = implicitly[ClassTag[Int]]
+        }
+        
+        new OrderedPartitioner[Int, Int](bounds, partitionSizes.length)(intOrderedKey)     
+      }
+      
+      val intOrderedPartitioner = makeIntOrderedPartitioner(vds1)
+      val variantOrderedPartitioner = vds1.rdd.orderedPartitioner
+      
+      val useFullRank = nEigs == n
+      val variants = vds1.variants.collect()
+      val variantsBc = sc.broadcast(variants) // can we avoid by zipping with index?
+      
+      val newRDD =
+        if (useFullRank) {
+          val Qt = qr.reduced.justQ(diagLMM.TC).t
+          val QtTy = Qt * diagLMM.Ty
+          val TyQtTy = (diagLMM.Ty dot diagLMM.Ty) - (QtTy dot QtTy)
+          val scalarLMM = new FullRankScalarLMM(diagLMM.Ty, diagLMM.TyTy, Qt, QtTy, TyQtTy, diagLMM.logNullS2, useML)
+          val scalarLMMBc = sc.broadcast(scalarLMM)
 
-        val lmmregAnnot = if (nonConstant) scalerLMMBc.value.likelihoodRatioTest(x) else null
+          val G = ToIndexedRowMatrix(vds1, useDosages, sampleMask, completeSampleIndex, Some(variants.length))
+          
+          val projG = (G.toBlockMatrixDense() * (Ut :* diagLMM.sqrtInvD.toArray).t)
+            .toIndexedRowMatrixOrderedPartitioner(intOrderedPartitioner)
+            .rows
+            .map { case IndexedRow(i, px) => (variantsBc.value(i.toInt), DenseVector(px.toArray)) }
 
-        val newAnnotation = inserter(va, lmmregAnnot)
-        assert(newVAS.typeCheck(newAnnotation))
-        newAnnotation
-      }.copy(vaSignature = newVAS)
-    }
-    else
-      vds2
-  }
+          val projG2 = OrderedRDD(projG, variantOrderedPartitioner)
 
-  def computeNEigsDVF(S: DenseVector[Double], droppedVarianceFraction: Double): Int = {
-    require(0 <= droppedVarianceFraction && droppedVarianceFraction < 1)
+          vds1.rdd.orderedLeftJoinDistinct(projG2).asOrderedRDD.mapPartitions({ it =>
+            val missingSamples = new ArrayBuilder[Int]
 
-    val trace = sum(S)
-    var i = -1
-    var runningSum = 0.0
-    val target = droppedVarianceFraction * trace
-    while (runningSum <= target && i < S.length - 1) {
-      i += 1
-      //Note that S is increasing
-      runningSum += S(i)
-    }
-    S.length - i
+            // columns are projected genotype vectors
+            var projX: DenseMatrix[Double] = null
+
+            it.grouped(blockSize)
+              .flatMap(git => {
+                val block = git.toArray
+                val blockLength = block.length
+
+                if (projX == null || projX.cols != blockLength)
+                  projX = new DenseMatrix[Double](nEigs, blockLength)
+
+                var i = 0
+                while (i < blockLength) {
+                  val (_, ((_, _), Some(px))) = block(i)
+
+                  projX(::, i) := px
+
+                  i += 1
+                }
+
+                val annotations = scalarLMMBc.value.likelihoodRatioTestBlock(projX)
+
+                (block, annotations).zipped.map { case ((v, ((va, gs), _)), a) => (v, (inserter(va, a), gs)) }
+              })
+          }, preservesPartitioning = true)
+        } else {
+          val scalarLMM = LowRankScalarLMM(lmmConstants, diagLMM.delta, diagLMM.logNullS2, useML)
+          val scalarLMMBc = sc.broadcast(scalarLMM)
+
+          val projG = pathToProjection match {
+            case Some(path) => dm.read(vds1.hc, path)
+            case None =>
+              val G = ToIndexedRowMatrix(vds1, useDosages, sampleMask, completeSampleIndex, Some(variants.length))
+              G.toBlockMatrixDense() * Ut.t
+          }
+          
+          if (projG.numRows() != variants.length)
+            fatal(s"Dimension mismatch: projection matches ${projG.numRows()} variants, but there are ${variants.length} variants.")
+          if (projG.numCols() != eigenDist.nEvects)
+            fatal(s"Dimension mismatch: projection matches ${projG.numCols()} eigenvectors, but there are ${eigenDist.nEvects} eigenvectors.")
+           
+          val projG1 = projG
+            .toIndexedRowMatrixOrderedPartitioner(intOrderedPartitioner)
+            .rows
+            .map { case IndexedRow(i, px) => (variantsBc.value(i.toInt), DenseVector(px.toArray)) }
+
+          val projG2 = OrderedRDD(projG1, variantOrderedPartitioner)
+          
+          vds1.rdd.orderedLeftJoinDistinct(projG2).asOrderedRDD.mapPartitions({ it =>
+            val sclr = scalarLMMBc.value
+
+            val r2 = 1 to c
+
+            val CtC = DenseMatrix.zeros[Double](c + 1, c + 1)
+            CtC(r2, r2) := sclr.con.CtC
+
+            val UtC = DenseMatrix.zeros[Double](nEigs, c + 1)
+            UtC(::, r2) := sclr.Utcov
+
+            val Cty = DenseVector.zeros[Double](c + 1)
+            Cty(r2) := sclr.con.Cty
+
+            val CzC = DenseMatrix.zeros[Double](c + 1, c + 1)
+            CzC(r2, r2) := sclr.UtcovZUtcov
+
+            val missingSamples = new ArrayBuilder[Int]
+            val x = DenseVector.zeros[Double](n)
+
+            it.map { case (v, ((va, gs), Some(px))) =>
+              if (useDosages)
+                RegressionUtils.dosages(x, gs, completeSampleIndexBc.value, missingSamples)
+              else
+                x := RegressionUtils.hardCalls(gs, n, sampleMaskBc.value) // No special treatment of constant
+
+              val annotation = sclr.likelihoodRatioTestLowRank(x, px, CtC, UtC, Cty, CzC)
+
+              (v, (inserter(va, annotation), gs))
+            }
+          }, preservesPartitioning = true)
+        }
+
+      vds1.unpersist()
+
+      vds1.copy(
+        rdd = newRDD.asOrderedRDD,
+        vaSignature = newVAS)
+    } else
+      vds1
+
+    vds2
   }
 }
-
-trait ScalerLMM {
-  def likelihoodRatioTest(v: Vector[Double]): Annotation
-}
-
-// Handles full-rank case
-class FullRankScalerLMM(
-  y: DenseVector[Double],
-  yy: Double,
-  Qt: DenseMatrix[Double],
-  Qty: DenseVector[Double],
-  yQty: Double,
-  T: DenseMatrix[Double],
-  logNullS2: Double,
-  useML: Boolean) extends ScalerLMM {
-
-  val n = y.length
-  val invDf = 1.0 / (if (useML) n else n - Qt.rows)
-
-  def likelihoodRatioTest(x0: Vector[Double]): Annotation = {
-    val x = T * x0
-    val n = y.length
-    val Qtx = Qt * x
-    val xQtx: Double = (x dot x) - (Qtx dot Qtx)
-    val xQty: Double = (x dot y) - (Qtx dot Qty)
-
-    val b: Double = xQty / xQtx
-    val s2 = invDf * (yQty - xQty * b)
-    val chi2 = n * (logNullS2 - math.log(s2))
-    val p = chiSquaredTail(1, chi2)
-
-    Annotation(b, s2, chi2, p)
-  }
-}
-
-// Handles low-rank case, but is slower than ScalerLMM on full-rank case
-class LowRankScalerLMM(con: LMMConstants, delta: Double, logNullS2: Double, useML: Boolean) extends ScalerLMM {
-  val n = con.n
-  val d = con.d
-  val k = con.S.length
-  val y = con.y
-  val covt = con.C.t
-  val Ut = con.Ut
-  val Uty = con.Uty
-  val Utcov = con.UtC
-  val covtcov = con.CtC
-  val covty = con.Cty
-  
-  val invDf = 1d / (if (useML) n else n - d)
-  val invDelta = 1 / delta
-  
-  val Z = (con.S + delta).map(1 / _ - invDelta)
-  val ydy = con.yty / delta + (Uty dot (Uty :* Z))
-  val UtcovZUtcov = Utcov.t * (Utcov(::, *) :* Z)
-  
-  val r1 = 0 to 0
-  val r2 = 1 to d
-  
-  def likelihoodRatioTest(x: Vector[Double]): Annotation = {
-    
-    val CtC = DenseMatrix.zeros[Double](d + 1, d + 1)
-    CtC(0, 0) = x dot x
-    CtC(r1, r2) :=  covt * x
-    CtC(r2, r1) := CtC(r1, r2).t
-    CtC(r2, r2) := con.CtC
-
-    val Utx = Ut * x
-    val UtC = DenseMatrix.horzcat(Utx.toDenseMatrix.t, Utcov)
-    val ZUtx = Utx :* Z
-    
-    val Cty = DenseVector.vertcat(DenseVector(x dot y), covty)
-    val Cdy = invDelta * Cty + (UtC.t  * (Uty :* Z))
-
-    val CzC = DenseMatrix.zeros[Double](d + 1, d + 1)
-    CzC(0, 0) = Utx dot ZUtx
-    CzC(r1, r2) := Utcov.t * ZUtx
-    CzC(r2, r1) := CzC(r1, r2).t
-    CzC(r2, r2) := UtcovZUtcov
-
-    val CdC = invDelta * CtC + CzC
-    
-    val b = CdC \ Cdy
-    val s2 = invDf * (ydy - (Cdy dot b))
-    val chi2 = n * (logNullS2 - math.log(s2))
-    val p = chiSquaredTail(1, chi2)
-
-    Annotation(b(0), s2, chi2, p)
-  }
-}
-
 
 object DiagLMM {
   def apply(
@@ -307,7 +503,7 @@ object DiagLMM {
     val S = lmmConstants.S
 
     val n = lmmConstants.n
-    val d = lmmConstants.d
+    val c = lmmConstants.c
 
     def fitDelta(): (Double, GlobalFitLMM) = {
 
@@ -335,7 +531,7 @@ object DiagLMM {
       }
 
       object LogLkhdREML extends UnivariateFunction {
-        val shift = -0.5 * (n - d) * (1 + math.log(2 * math.Pi))
+        val shift = -0.5 * (n - c) * (1 + math.log(2 * math.Pi))
 
         def value(logDelta: Double): Double = {
           val delta = FastMath.exp(logDelta)
@@ -349,13 +545,13 @@ object DiagLMM {
           val CdC = invDelta * CtC + (UtC.t * (UtC(::, *) :* Z))
 
           val b = CdC \ Cdy
-          val sigma2 = (ydy - (Cdy dot b)) / (n - d)
+          val sigma2 = (ydy - (Cdy dot b)) / (n - c)
 
           val logdetD = sum(breeze.numerics.log(D)) + (n - S.length) * logDelta
           val (_, logdetCdC) = logdet(CdC)
           val (_, logdetCtC) = logdet(CtC)
 
-          -0.5 * (logdetD + logdetCdC - logdetCtC + (n - d) * math.log(sigma2)) + shift
+          -0.5 * (logdetD + logdetCdC - logdetCtC + (n - c) * math.log(sigma2)) + shift
         }
       }
 
@@ -377,9 +573,9 @@ object DiagLMM {
       val (approxLogDelta, _) = gridLogLkhd.maxBy(_._2)
 
       if (approxLogDelta == minLogDelta)
-        fatal(s"lmmreg: failed to fit delta: ${if (useML) "ML" else "REML"} realized at delta lower search boundary e^$minLogDelta = ${FastMath.exp(minLogDelta)}, indicating negligible enviromental component of variance. The model is likely ill-specified.")
+        fatal(s"lmmreg: failed to fit delta: ${ if (useML) "ML" else "REML" } realized at delta lower search boundary e^$minLogDelta = ${ FastMath.exp(minLogDelta) }, indicating negligible enviromental component of variance. The model is likely ill-specified.")
       else if (approxLogDelta == maxLogDelta)
-        fatal(s"lmmreg: failed to fit delta: ${if (useML) "ML" else "REML"} realized at delta upper search boundary e^$maxLogDelta = ${FastMath.exp(maxLogDelta)}, indicating negligible genetic component of variance. Standard linear regression may be more appropriate.")
+        fatal(s"lmmreg: failed to fit delta: ${ if (useML) "ML" else "REML" } realized at delta upper search boundary e^$maxLogDelta = ${ FastMath.exp(maxLogDelta) }, indicating negligible genetic component of variance. Standard linear regression may be more appropriate.")
 
       val searchInterval = new SearchInterval(minLogDelta, maxLogDelta, approxLogDelta)
       val goal = GoalType.MAXIMIZE
@@ -394,7 +590,7 @@ object DiagLMM {
       if (math.abs(maxlogDelta - approxLogDelta) > 1d / pointsPerUnit) {
         warn(s"lmmreg: the difference between the optimal value $approxLogDelta of ln(delta) on the grid and" +
           s"the optimal value $maxlogDelta of ln(delta) by Brent's method exceeds the grid resolution" +
-          s"of ${1d / pointsPerUnit}. Plot the values over the full grid to investigate.")
+          s"of ${ 1d / pointsPerUnit }. Plot the values over the full grid to investigate.")
       }
 
       val epsilon = 1d / pointsPerUnit
@@ -415,7 +611,7 @@ object DiagLMM {
       val y3 = logLkhdFunction.value(z3)
 
       if (y1 >= y2 || y3 >= y2)
-        fatal(s"Maximum likelihood estimate ${math.exp(maxlogDelta)} for delta is not a global max. " +
+        fatal(s"Maximum likelihood estimate ${ math.exp(maxlogDelta) } for delta is not a global max. " +
           s"Plot the values over the full grid to investigate.")
 
       // fitting parabola logLkhd ~ a * x^2 + b * x + c near MLE by Lagrange interpolation gives
@@ -445,7 +641,7 @@ object DiagLMM {
       val CdC = invDelta * CtC + (UtC.t * (UtC(::, *) :* Z))
 
       val b = CdC \ Cdy
-      val s2 = (ydy - (Cdy dot b)) / (if (useML) n else n - d)
+      val s2 = (ydy - (Cdy dot b)) / (if (useML) n else n - c)
       val sqrtInvD = sqrt(invD)
       val TC = UtC(::, *) :* sqrtInvD
       val Ty = Uty :* sqrtInvD
@@ -456,15 +652,19 @@ object DiagLMM {
 
     val (delta, optGlobalFit) = optDelta match {
       case Some(delta0) => (delta0, None)
-      case None => {
-        val (delta0, gf) = fitDelta()
+      case None =>
+        info("lmmreg: Fitting delta...")
+        val (delta0, gf) = printTime(fitDelta())
         (delta0, Some(gf))
-      }
     }
 
     fitUsingDelta(delta, optGlobalFit)
   }
 }
+
+case class LMMConstants(y: DenseVector[Double], C: DenseMatrix[Double], S: DenseVector[Double],
+  Uty: DenseVector[Double], UtC: DenseMatrix[Double], Cty: DenseVector[Double],
+  CtC: DenseMatrix[Double], yty: Double, n: Int, c: Int)
 
 case class GlobalFitLMM(maxLogLkhd: Double, gridLogLkhd: IndexedSeq[(Double, Double)], sigmaH2: Double, h2NormLkhd: IndexedSeq[Double])
 
@@ -480,23 +680,79 @@ case class DiagLMM(
   TyTy: Double,
   useML: Boolean)
 
-object LMMConstants {
-  def apply(y: DenseVector[Double], C: DenseMatrix[Double],
-            S: DenseVector[Double], Ut: DenseMatrix[Double]): LMMConstants = {
-    val UtC = Ut * C
-    val Uty = Ut * y
+// Handles full-rank case
+class FullRankScalarLMM(
+  y: DenseVector[Double],
+  yy: Double,
+  Qt: DenseMatrix[Double],
+  Qty: DenseVector[Double],
+  yQty: Double,
+  logNullS2: Double,
+  useML: Boolean) {
 
-    val CtC = C.t * C
-    val Cty = C.t * y
-    val yty = y.t * y
+  val n = y.length
+  val invDf = 1.0 / (if (useML) n else n - Qt.rows)
 
-    val n = y.length
-    val d = C.cols
+  def likelihoodRatioTestBlock(X: DenseMatrix[Double]): Array[Annotation] = {
+    val n = y.length.toDouble
+    val QtX = Qt * X
+    val XQtX = X.t(*, ::).map(r => r dot r) - QtX.t(*, ::).map(r => r dot r)
+    val XQty = X.t * y - QtX.t * Qty
 
-    new LMMConstants(y, C, S, Ut, Uty, UtC, Cty, CtC, yty, n, d)
+    val b = XQty :/ XQtX
+    val s2 = invDf * (yQty - (XQty :* b))
+    val chi2 = n * (logNullS2 - breeze.numerics.log(s2))
+    val p = chi2.map(c => chiSquaredTail(1, c))
+    
+    Array.tabulate(X.cols)(i => Annotation(b(i), s2(i), chi2(i), p(i)))
   }
 }
 
-case class LMMConstants(y: DenseVector[Double], C: DenseMatrix[Double], S: DenseVector[Double], Ut: DenseMatrix[Double],
-                        Uty: DenseVector[Double], UtC: DenseMatrix[Double], Cty: DenseVector[Double],
-                        CtC: DenseMatrix[Double], yty: Double, n: Int, d: Int)
+// Handles low-rank case, but is slower than ScalarLMM on full-rank case
+case class LowRankScalarLMM(con: LMMConstants, delta: Double, logNullS2: Double, useML: Boolean) {
+  val n = con.n
+  val Uty = con.Uty
+  val Utcov = con.UtC
+
+  val invDf = 1d / (if (useML) n else n - con.c)
+  val invDelta = 1 / delta
+
+  val Z = (con.S + delta).map(1 / _ - invDelta)
+  val ydy = con.yty / delta + (Uty dot (Uty :* Z))
+  val UtcovZUtcov = Utcov.t * (Utcov(::, *) :* Z)
+
+  val r0 = 0 to 0
+  val r1 = 1 to con.c
+
+  def likelihoodRatioTestLowRank(x: Vector[Double], Utx: DenseVector[Double], CtC: DenseMatrix[Double], UtC: DenseMatrix[Double], Cty: DenseVector[Double], CzC: DenseMatrix[Double]): Annotation = {
+
+    CtC(0, 0) = x dot x
+    CtC(r0, r1) := con.C.t * x
+    CtC(r1, r0) := CtC(r0, r1).t
+
+    UtC(::, 0) := Utx
+
+    Cty(0) = x dot con.y
+
+    val Cdy = invDelta * Cty + (UtC.t * (Uty :* Z))
+
+    val ZUtx = Utx :* Z
+
+    CzC(0, 0) = Utx dot ZUtx
+    CzC(r0, r1) := Utcov.t * ZUtx
+    CzC(r1, r0) := CzC(r0, r1).t
+
+    val CdC = invDelta * CtC + CzC
+
+    try {
+      val b = CdC \ Cdy
+      val s2 = invDf * (ydy - (Cdy dot b))
+      val chi2 = n * (logNullS2 - math.log(s2))
+      val p = chiSquaredTail(1, chi2)
+
+      Annotation(b(0), s2, chi2, p)
+    } catch {
+      case e: breeze.linalg.MatrixSingularException => null
+    }
+  }
+}
