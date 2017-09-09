@@ -5,7 +5,7 @@ import is.hail.utils.{ArrayBuilder, HailIterator, JSONWriter, MultiArray2, Trunc
 import is.hail.variant.Variant
 import org.apache.hadoop
 import org.apache.spark.SparkContext
-import org.apache.spark.mllib.linalg.distributed.{IndexedRow, IndexedRowMatrix}
+import org.apache.spark.mllib.linalg.distributed.{BlockMatrix, IndexedRow, IndexedRowMatrix}
 import org.apache.spark.mllib.linalg.{Matrix => SparkMatrix}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Row, SQLContext}
@@ -34,6 +34,8 @@ trait Implicits {
   implicit def toRichDouble(d: Double): RichDouble = new RichDouble(d)
 
   implicit def toRichEnumeration[T <: Enumeration](e: T): RichEnumeration[T] = new RichEnumeration(e)
+
+  implicit def toRichBlockMatrix(bm: BlockMatrix): RichBlockMatrix = new RichBlockMatrix(bm)
 
   implicit def toRichHadoopConfiguration(hConf: hadoop.conf.Configuration): RichHadoopConfiguration =
     new RichHadoopConfiguration(hConf)
