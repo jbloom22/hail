@@ -232,8 +232,7 @@ case class Eigen(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMat
     
     info(s"Transforming $nEigs variant eigenvectors to sample eigenvectors...")
         
-    var filteredVDS = vds.filterVariants((v, _, _) => variantSet(v))
-    filteredVDS = filteredVDS.persist()
+    val filteredVDS = vds.filterVariants((v, _, _) => variantSet(v)).persist()
     require(filteredVDS.variants.count() == variantSet.size, "Some variants in LD matrix eigendecomposition are missing from VDS")
     
     val G = ToNormalizedIndexedRowMatrix(filteredVDS).toBlockMatrixDense().t
