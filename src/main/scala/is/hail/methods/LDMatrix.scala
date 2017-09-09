@@ -25,14 +25,22 @@ object LDMatrix {
 
     val filteredNormalizedHardCalls = vds.rdd.flatMap { 
       case (v, (_, gs)) => RegressionUtils.normalizedHardCalls(gs, nSamples).map(x => (v, x))
-    }.persist()
+    }
+      .persist() // adding persist to avoid recomputing flatMap after the collect
     
     val variantsKept = filteredNormalizedHardCalls.map(_._1).collect()
     assert(variantsKept.isSorted, "ld_matrix: Array of variants is not sorted. This is a bug")
     
-    val normalizedIndexedRows = filteredNormalizedHardCalls.map(_._2).zipWithIndex()
-      .map{ case (vec, idx) => IndexedRow(idx, Vectors.dense(vec))}
-    val normalizedBlockMatrix = new IndexedRowMatrix(normalizedIndexedRows).toBlockMatrixDense()
+    // zipWithIndex creates a job (stage) to calculate start indices, so I'm switching back to broadcast to compare
+    // val normalizedIndexedRows = filteredNormalizedHardCalls.map(_._2).zipWithIndex()
+    //   .map{ case (vec, idx) => IndexedRow(idx, Vectors.dense(vec))}
+
+    val variantsKeptIndexBc = vds.sparkContext.broadcast(variantsKept.index)    
+    val normalizedIndexedRows = filteredNormalizedHardCalls.map { case  (v, a) =>
+      IndexedRow(variantsKeptIndexBc.value(v), Vectors.dense(a)) }
+
+    // adding numCols and numRows removes stages
+    val normalizedBlockMatrix = new IndexedRowMatrix(normalizedIndexedRows, variantsKept.length, nSamples).toBlockMatrixDense()
 
     filteredNormalizedHardCalls.unpersist()
 
