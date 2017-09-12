@@ -64,4 +64,10 @@ class RichDenseMatrixDouble(val m: DenseMatrix[Double]) extends AnyVal {
       i += 1
     }
   }
+  
+  def toArrayShallow: Array[Double] =
+    if (m.offset == 0 && m.majorStride == m.rows && !m.isTranspose)
+      m.data
+    else
+      m.toArray
 }
