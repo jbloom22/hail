@@ -1,7 +1,8 @@
 package is.hail.utils.richUtils
 
 import breeze.linalg.DenseMatrix
-import is.hail.utils.ArrayBuilder
+import is.hail.HailContext
+import is.hail.utils._
 
 object RichDenseMatrixDouble {
   def horzcat(oms: Option[DenseMatrix[Double]]*): Option[DenseMatrix[Double]] = {
@@ -10,6 +11,29 @@ object RichDenseMatrixDouble {
       None
     else
       Some(DenseMatrix.horzcat(ms: _*))
+  }
+  
+  def read(hc: HailContext, uri: String): DenseMatrix[Double] = {
+    val hadoop = hc.sc.hadoopConfiguration
+    var nRows = 0
+    var nCols = 0
+    var data: Array[Double] = null
+
+    hadoop.readDataFile(uri) { is =>
+      nRows = is.readInt()
+      nCols = is.readInt()
+      data = Array.ofDim[Double](nRows * nCols)
+      
+      var i = 0
+      while (i < nRows * nCols) {
+        data(i) = is.readDouble()
+        i += 1
+      }
+      if (is.read() != -1) // check EOF
+        fatal("Malformed matrix file")
+    }
+
+    new DenseMatrix[Double](nRows, nCols, data)
   }
 }
 
@@ -65,9 +89,28 @@ class RichDenseMatrixDouble(val m: DenseMatrix[Double]) extends AnyVal {
     }
   }
   
-  def toArrayShallow: Array[Double] =
+  def asArray: Array[Double] =
     if (m.offset == 0 && m.majorStride == m.rows && !m.isTranspose)
       m.data
     else
       m.toArray
+  
+  def write(hc: HailContext, uri: String) {
+    val hadoop = hc.sc.hadoopConfiguration
+    hadoop.mkDir(uri)
+
+    hadoop.writeDataFile(uri) { os =>
+      os.writeInt(m.rows)
+      os.writeInt(m.cols)
+
+      val data = m.asArray
+      assert(data.length == m.rows * m.cols)
+
+      var i = 0
+      while (i < data.length) {
+        os.writeDouble(data(i))
+        i += 1
+      }
+    }
+  }
 }
