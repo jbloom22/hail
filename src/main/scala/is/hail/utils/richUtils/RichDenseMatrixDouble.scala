@@ -40,7 +40,7 @@ object RichDenseMatrixDouble {
 // Not supporting generic T because its difficult to do with ArrayBuilder and not needed yet. See:
 // http://stackoverflow.com/questions/16306408/boilerplate-free-scala-arraybuilder-specialization
 class RichDenseMatrixDouble(val m: DenseMatrix[Double]) extends AnyVal {
-  def filterRows(keepRow: Int => Boolean): Option[DenseMatrix[Double]] = {
+  def filterRows(keepRow: Int => Boolean): DenseMatrix[Double] = {
     val ab = new ArrayBuilder[Double]()
 
     var nRows = 0
@@ -51,14 +51,12 @@ class RichDenseMatrixDouble(val m: DenseMatrix[Double]) extends AnyVal {
           ab += m.unsafeValueAt(row, col)
       }
 
-    if (nRows > 0)
-      Some(new DenseMatrix[Double](rows = nRows, cols = m.cols, data = ab.result(),
-        offset = 0, majorStride = m.cols, isTranspose = true))
-    else
-      None
+
+    new DenseMatrix[Double](rows = nRows, cols = m.cols, data = ab.result(),
+        offset = 0, majorStride = m.cols, isTranspose = true)
   }
 
-  def filterCols(keepCol: Int => Boolean): Option[DenseMatrix[Double]] = {
+  def filterCols(keepCol: Int => Boolean): DenseMatrix[Double] = {
     val ab = new ArrayBuilder[Double]()
 
     var nCols = 0
@@ -69,10 +67,7 @@ class RichDenseMatrixDouble(val m: DenseMatrix[Double]) extends AnyVal {
           ab += m.unsafeValueAt(row, col)
       }
 
-    if (nCols > 0)
-      Some(new DenseMatrix[Double](rows = m.rows, cols = nCols, data = ab.result()))
-    else
-      None
+    new DenseMatrix[Double](rows = m.rows, cols = nCols, data = ab.result())
   }
 
   def forceSymmetry() {

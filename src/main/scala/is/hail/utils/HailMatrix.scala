@@ -3,22 +3,25 @@ package is.hail.utils
 import breeze.linalg.{*, DenseMatrix, DenseVector, inv}
 import is.hail.HailContext
 import is.hail.annotations.Annotation
-import is.hail.expr.Type
+import is.hail.expr.{TInt32, Type}
+import is.hail.stats.eigSymD
 import is.hail.utils.richUtils.RichDenseMatrixDouble
-import org.apache.spark.mllib.linalg.distributed.{BlockMatrix, IndexedRowMatrix}
+import org.apache.spark.rdd.RDD
 
 object HailVector {
   def read(hc: HailContext, uri: String): HailVector = fatal("Not implemented")
 }
 
-// do we handle reading and writing of vectors?
-// should we just wrap Array[Double] if we're not supporting slicing? what about sparse vectors?
+// FIXME: should we wrap Array[Double] instead? Breeze adds a lot of complexity to manage slicing
 case class HailVector(v: DenseVector[Double]) {
   def length: Int = v.length
   
   def apply(i: Int): Double = v(i)
   
+  def slice(i: Int, j: Int): HailVector = HailVector(v(i until j))
+    
   def add(hv: HailVector): HailVector = HailVector(v + hv.v)
+  def dot(hv: HailVector): Double = v dot hv.v
   
   def scalarAdd(e: Double): HailVector = HailVector(v + e)
   def scalarMultiply(e: Double): HailVector = HailVector(v * e)  
@@ -37,7 +40,9 @@ case class HailVector(v: DenseVector[Double]) {
 }
 
 object HailMatrix {
-  def read(hc: HailContext, uri: String, hailMatrixType: Int): HailMatrix = { // FIXME: change on disk formats to include type, then remove parameter
+  def read(hc: HailContext, uri: String): HailMatrix = {
+    val hailMatrixType = 0 // FIXME: change on disk formats to include this type so can read type and dispatch
+    
     hailMatrixType match {
       case 1 => HailLocalMatrix.read(hc, uri)
       case 2 => HailBlockMatrix.read(hc, uri)
@@ -48,8 +53,8 @@ object HailMatrix {
 }
 
 sealed trait HailMatrix {
-  def nRows: Int // or Long?
-  def nCols: Int
+  def nRows: Long // FIXME: I've made these Long but they cannot currently exceed Int when keyed
+  def nCols: Long
 
   def transpose: HailMatrix
   
@@ -70,8 +75,8 @@ sealed trait HailMatrix {
   def scalarAdd(e: Double): HailMatrix
   def scalarMultiply(e: Double): HailMatrix
 
-  def filterRows(pred: Int => Boolean): Option[HailMatrix]
-  def filterCols(pred: Int => Boolean): Option[HailMatrix]
+  def filterRows(pred: Int => Boolean): HailMatrix
+  def filterCols(pred: Int => Boolean): HailMatrix
   
   def write(hc: HailContext, uri: String): Unit // hc unnecessary of block and irm...should it be built into local?
   
@@ -89,47 +94,47 @@ object HailLocalMatrix {
 }
 
 case class HailLocalMatrix(m: DenseMatrix[Double]) extends HailMatrix {
-  def nRows: Int = m.rows
-  def nCols: Int = m.cols
+  def nRows: Long = m.rows
+  def nCols: Long = m.cols
   
   def transpose = HailLocalMatrix(m.t)
   
   def add(hm: HailMatrix): HailMatrix = hm match {
     case HailLocalMatrix(m2) => HailLocalMatrix(m + m2)
-    case HailBlockMatrix(m2) => fatal("Not implemented")
-    case HailIndexedRowMatrix(m2) => fatal("Not implemented")
+    case _: HailBlockMatrix => fatal("Not implemented")
+    case _: HailIndexedRowMatrix => fatal("Not implemented")
   } 
   def subtract(hm: HailMatrix): HailMatrix = hm match {
     case HailLocalMatrix(m2) => HailLocalMatrix(m - m2)
-    case HailBlockMatrix(m2) => fatal("Not implemented")
-    case HailIndexedRowMatrix(m2) => fatal("Not implemented")
+    case _: HailBlockMatrix => fatal("Not implemented")
+    case _: HailIndexedRowMatrix => fatal("Not implemented")
   }
   def multiply(hm: HailMatrix): HailMatrix = hm match {
     case HailLocalMatrix(m2) => HailLocalMatrix(m * m2)
-    case HailBlockMatrix(m2) => fatal("Not implemented")
-    case HailIndexedRowMatrix(m2) => fatal("Not implemented")
+    case _: HailBlockMatrix => fatal("Not implemented")
+    case _: HailIndexedRowMatrix => fatal("Not implemented")
   }
   
   def pointwiseMultiply(hm: HailMatrix): HailMatrix = hm match {
     case HailLocalMatrix(m2) => HailLocalMatrix(m :* m2)
-    case HailBlockMatrix(m2) => fatal("Not implemented")
-    case HailIndexedRowMatrix(m2) => fatal("Not implemented")
+    case _: HailBlockMatrix => fatal("Not implemented")
+    case _: HailIndexedRowMatrix => fatal("Not implemented")
   }
 
-  def vectorPointwiseAddEveryRow(hv: HailVector): HailMatrix = HailLocalMatrix(m(::, *) :+ hv.v)
-  def vectorPointwiseAddEveryColumn(hv: HailVector): HailMatrix = HailLocalMatrix(m(*, ::) :+ hv.v)
+  def vectorPointwiseAddEveryRow(hv: HailVector): HailLocalMatrix = HailLocalMatrix(m(::, *) :+ hv.v)
+  def vectorPointwiseAddEveryColumn(hv: HailVector): HailLocalMatrix = HailLocalMatrix(m(*, ::) :+ hv.v)
   
   def vectorPointwiseMultiplyEveryRow(hv: HailVector) = HailLocalMatrix(m(::, *) :* hv.v)
   def vectorPointwiseMultiplyEveryColumn(hv: HailVector) = HailLocalMatrix(m(*, ::) :* hv.v)
   
-  def scalarAdd(e: Double): HailMatrix = HailLocalMatrix(m + e)
-  def scalarSubtract(e: Double): HailMatrix = HailLocalMatrix(m - e)
-  def scalarMultiply(e: Double): HailMatrix = HailLocalMatrix(m * e)
+  def scalarAdd(e: Double): HailLocalMatrix = HailLocalMatrix(m + e)
+  def scalarSubtract(e: Double): HailLocalMatrix = HailLocalMatrix(m - e)
+  def scalarMultiply(e: Double): HailLocalMatrix = HailLocalMatrix(m * e)
   
   def multiply(hv: HailVector): HailVector = HailVector(m * hv.v)
     
-  def filterRows(pred: Int => Boolean): Option[HailLocalMatrix] = m.filterRows(pred).map(HailLocalMatrix(_))
-  def filterCols(pred: Int => Boolean): Option[HailLocalMatrix] = m.filterCols(pred).map(HailLocalMatrix(_))
+  def filterRows(pred: Int => Boolean): HailLocalMatrix = HailLocalMatrix(m.filterRows(pred))
+  def filterCols(pred: Int => Boolean): HailLocalMatrix = HailLocalMatrix(m.filterCols(pred))
   
   def write(hc: HailContext, uri: String): Unit = m.write(hc, uri)
 
@@ -147,37 +152,37 @@ case class HailLocalMatrix(m: DenseMatrix[Double]) extends HailMatrix {
   def asArray: Array[Double] = m.asArray
 }
 
-// will use Dan's implementation of BlockMatrix
+// FIXME: use Dan's implementation of BlockMatrix
 object HailBlockMatrix {
   def read(hc: HailContext, uri: String): HailBlockMatrix = fatal("Not implemented")
 }
 
-case class HailBlockMatrix(m: BlockMatrix) extends HailMatrix {
-  def nRows: Int = fatal("Not implemented")
-  def nCols: Int = fatal("Not implemented")
+class HailBlockMatrix extends HailMatrix {
+  def nRows: Long = fatal("Not implemented")
+  def nCols: Long = fatal("Not implemented")
 
   def transpose: HailMatrix = fatal("Not implemented")
   
   def add(hm: HailMatrix): HailMatrix = hm match {
     case HailLocalMatrix(m2) => fatal("Not implemented")
-    case HailBlockMatrix(m2) => fatal("Not implemented")
-    case HailIndexedRowMatrix(m2) => fatal("Not implemented")
+    case _: HailBlockMatrix => fatal("Not implemented")
+    case _: HailIndexedRowMatrix => fatal("Not implemented")
   }
   def subtract(hm: HailMatrix): HailMatrix = hm match {
     case HailLocalMatrix(m2) => fatal("Not implemented")
-    case HailBlockMatrix(m2) => fatal("Not implemented")
-    case HailIndexedRowMatrix(m2) => fatal("Not implemented")
+    case _: HailBlockMatrix => fatal("Not implemented")
+    case _: HailIndexedRowMatrix => fatal("Not implemented")
   }
   def multiply(hm: HailMatrix): HailMatrix = hm match {
     case HailLocalMatrix(m2) => fatal("Not implemented")
-    case HailBlockMatrix(m2) => fatal("Not implemented")
-    case HailIndexedRowMatrix(m2) => fatal("Not implemented")
+    case _: HailBlockMatrix => fatal("Not implemented")
+    case _: HailIndexedRowMatrix => fatal("Not implemented")
   }
 
   def pointwiseMultiply(hm: HailMatrix): HailMatrix = hm match {
     case HailLocalMatrix(m2) => fatal("Not implemented")
-    case HailBlockMatrix(m2) => fatal("Not implemented")
-    case HailIndexedRowMatrix(m2) => fatal("Not implemented")
+    case _: HailBlockMatrix => fatal("Not implemented")
+    case _: HailIndexedRowMatrix => fatal("Not implemented")
   }
   
   def multiply(hv: HailVector): HailVector = fatal("Not implemented")
@@ -191,8 +196,8 @@ case class HailBlockMatrix(m: BlockMatrix) extends HailMatrix {
   def scalarAdd(e: Double): HailMatrix = fatal("Not implemented")
   def scalarMultiply(e: Double): HailMatrix = fatal("Not implemented")
 
-  def filterRows(pred: Int => Boolean): Option[HailMatrix] = fatal("Not implemented")
-  def filterCols(pred: Int => Boolean): Option[HailMatrix] = fatal("Not implemented")
+  def filterRows(pred: Int => Boolean): HailMatrix = fatal("Not implemented")
+  def filterCols(pred: Int => Boolean): HailMatrix = fatal("Not implemented")
   
   def write(hc: HailContext, uri: String): Unit = fatal("Not implemented")
   
@@ -205,33 +210,35 @@ object HailIndexedRowMatrix {
   def read(hc: HailContext, uri: String): HailIndexedRowMatrix = fatal("Not implemented")
 }
 
-// will reimplement and use reflection to get SVD
-case class HailIndexedRowMatrix(m: IndexedRowMatrix) extends HailMatrix {
-  def nRows: Int = fatal("Not implemented")
-  def nCols: Int = fatal("Not implemented")
+case class HailIndexedRow(index: Long, vector: DenseVector[Double])
+
+// FIXME: Implement.
+class HailIndexedRowMatrix(val rows: RDD[HailIndexedRow], val numRows: Long, val numCols: Int) extends HailMatrix {
+  def nRows: Long = fatal("Not implemented")
+  def nCols: Long = fatal("Not implemented")
 
   def transpose: HailMatrix = fatal("Not implemented")
   
   def add(hm: HailMatrix): HailMatrix = hm match {
     case HailLocalMatrix(m2) => fatal("Not implemented")
-    case HailBlockMatrix(m2) => fatal("Not implemented")
-    case HailIndexedRowMatrix(m2) => fatal("Not implemented")
+    case _: HailBlockMatrix => fatal("Not implemented")
+    case _: HailIndexedRowMatrix => fatal("Not implemented")
   }
   def subtract(hm: HailMatrix): HailMatrix = hm match {
     case HailLocalMatrix(m2) => fatal("Not implemented")
-    case HailBlockMatrix(m2) => fatal("Not implemented")
-    case HailIndexedRowMatrix(m2) => fatal("Not implemented")
+    case _: HailBlockMatrix => fatal("Not implemented")
+    case _: HailIndexedRowMatrix => fatal("Not implemented")
   }
   def multiply(hm: HailMatrix): HailMatrix = hm match {
     case HailLocalMatrix(m2) => fatal("Not implemented")
-    case HailBlockMatrix(m2) => fatal("Not implemented")
-    case HailIndexedRowMatrix(m2) => fatal("Not implemented")
+    case _: HailBlockMatrix => fatal("Not implemented")
+    case _: HailIndexedRowMatrix => fatal("Not implemented")
   }
 
   def pointwiseMultiply(hm: HailMatrix): HailMatrix = hm match {
     case HailLocalMatrix(m2) => fatal("Not implemented")
-    case HailBlockMatrix(m2) => fatal("Not implemented")
-    case HailIndexedRowMatrix(m2) => fatal("Not implemented")
+    case _: HailBlockMatrix => fatal("Not implemented")
+    case _: HailIndexedRowMatrix => fatal("Not implemented")
   }
   
   def multiply(hv: HailVector): HailVector = fatal("Not implemented")
@@ -245,8 +252,8 @@ case class HailIndexedRowMatrix(m: IndexedRowMatrix) extends HailMatrix {
   def scalarAdd(e: Double): HailMatrix = fatal("Not implemented")
   def scalarMultiply(e: Double): HailMatrix = fatal("Not implemented")
 
-  def filterRows(pred: Int => Boolean): Option[HailMatrix] = fatal("Not implemented")
-  def filterCols(pred: Int => Boolean): Option[HailMatrix] = fatal("Not implemented")
+  def filterRows(pred: Int => Boolean): HailMatrix = fatal("Not implemented")
+  def filterCols(pred: Int => Boolean): HailMatrix = fatal("Not implemented")
   
   def write(hc: HailContext, uri: String): Unit = fatal("Not implemented")
   
@@ -259,11 +266,16 @@ case class HailIndexedRowMatrix(m: IndexedRowMatrix) extends HailMatrix {
 
 object Keys {
   def read(hc: HailContext, uri: String): Keys = fatal("Not implemented")
+  
+  def ofDim(length: Int): Keys = Keys(TInt32, (0 until length).toArray)
 }
 
-case class Keys(signature: Type, values: IndexedSeq[Annotation]) {
-//  override def equals(that: Keys): Boolean = signature == that.signature && (values sameElements that.values)
-
+case class Keys(signature: Type, values: Array[Annotation]) {
+  override def equals(that: Any): Boolean = that match {
+    case k: Keys => signature == k.signature && values.sameElements(k.values)
+    case _ => false
+  }
+  
   def length: Int = values.length
   
   def apply(i: Int): Annotation = {
@@ -273,19 +285,14 @@ case class Keys(signature: Type, values: IndexedSeq[Annotation]) {
     values(i)
   }
   
-  def isEmpty: Boolean = values.isEmpty
-  
   def filter(pred: Annotation => Boolean): Keys = Keys(signature, values.filter(pred))
   
-  def typeCheck(): Unit = values.foreach(signature.typeCheck) // sensible?
+  def toSet: Set[Annotation] = values.toSet // e.g., for use in lhs.multiply(rhs.filterRows(lhs.colKeys.toSet))
   
-  def write(hc: HailContext, uri: String): Unit = {
-    
-  }
+  def typeCheck(): Unit = values.foreach(signature.typeCheck)
+  
+  def write(hc: HailContext, uri: String): Unit = fatal("Not implemented")
 }
-
-
-// Do we need a KeyedVector?
 
 
 object KeyedMatrix {
@@ -296,21 +303,22 @@ object KeyedMatrix {
   def read(hc: HailContext, uri: String): KeyedMatrix = {
     val rowKeys = Keys.read(hc, uri + rowKeysRelativePath)
     val colKeys = Keys.read(hc, uri + rowKeysRelativePath)
-    val hm = HailMatrix.read(hc, uri + hailMatrixRelativePath, 1)
+    val hm = HailMatrix.read(hc, uri + hailMatrixRelativePath)
     
     KeyedMatrix(rowKeys, colKeys, hm)
   }
 }
 
 case class KeyedMatrix(rowKeys: Keys, colKeys: Keys, hm: HailMatrix) {
-  require(rowKeys.length == hm.nRows && colKeys.length == hm.nCols)
+  require(rowKeys.length == hm.nRows && colKeys.length == hm.nCols) // also enforces nRows and nCols < Int.MaxValue
   
-  def nRows: Int = hm.nRows
-  def nCols: Int = hm.nCols
+  def nRows: Long = hm.nRows
+  def nCols: Long = hm.nCols
 
   def transpose: KeyedMatrix = KeyedMatrix(colKeys, rowKeys, hm.transpose)
   
-  def add(km: KeyedMatrix): KeyedMatrix = KeyedMatrix(rowKeys, colKeys, hm.add(km.hm)) // what checks to do on keys?
+  // FIXME: when to check that keys match? e.g. here I'm checking on multiplication, but not on addition
+  def add(km: KeyedMatrix): KeyedMatrix = KeyedMatrix(rowKeys, colKeys, hm.add(km.hm))
   def subtract(km: KeyedMatrix): KeyedMatrix = KeyedMatrix(rowKeys, colKeys, hm.subtract(km.hm))
   def multiply(km: KeyedMatrix): KeyedMatrix = {
     if (colKeys != km.rowKeys)
@@ -320,6 +328,7 @@ case class KeyedMatrix(rowKeys: Keys, colKeys: Keys, hm: HailMatrix) {
   
   def pointwiseMultiply(km: KeyedMatrix): KeyedMatrix = KeyedMatrix(rowKeys, colKeys, hm.pointwiseMultiply(km.hm))
   
+  // FIXME: for checking / filtering / indexing by key, it seems natural to also have a KeyedVector
   def multiply(hv: HailVector): HailVector = hm.multiply(hv)
 
   def vectorPointwiseAddEveryRow(hv: HailVector): KeyedMatrix = KeyedMatrix(rowKeys, colKeys, hm.vectorPointwiseAddEveryRow(hv))
@@ -332,12 +341,12 @@ case class KeyedMatrix(rowKeys: Keys, colKeys: Keys, hm: HailMatrix) {
   def scalarMultiply(e: Double): KeyedMatrix = KeyedMatrix(rowKeys, colKeys, hm.scalarMultiply(e))
 
   // FIXME: don't evaluate pred twice
-  def filterRows(pred: Annotation => Boolean): Option[KeyedMatrix] =
-    hm.filterRows(rowKeys.values.map(pred)).map(KeyedMatrix(rowKeys.filter(pred), colKeys, _))
-    
-  def filterCols(pred: Annotation => Boolean): Option[KeyedMatrix] =
-    hm.filterCols(colKeys.values.map(pred)).map(KeyedMatrix(rowKeys, colKeys.filter(pred), _))
+  def filterRows(pred: Annotation => Boolean): KeyedMatrix = KeyedMatrix(rowKeys.filter(pred), colKeys, hm.filterRows(rowKeys.values.map(pred)))
+  def filterCols(pred: Annotation => Boolean): KeyedMatrix = KeyedMatrix(rowKeys, colKeys.filter(pred), hm.filterCols(colKeys.values.map(pred)))
   
+  // def filterRowIndices(pred: Int => Boolean): KeyedMatrix ???
+  // def filterColIndices(pred: Int => Boolean): KeyedMatrix ???
+
   def write(hc: HailContext, uri: String): Unit = {
     import KeyedMatrix._
     
@@ -350,7 +359,7 @@ case class KeyedMatrix(rowKeys: Keys, colKeys: Keys, hm: HailMatrix) {
   def toKeyedHailBlockMatrix: KeyedMatrix = KeyedMatrix(rowKeys, colKeys, hm.toHailBlockMatrix)
   def toKeyedHailIndexedRowMatrix: KeyedMatrix = KeyedMatrix(rowKeys, colKeys, hm.toHailIndexedRowMatrix)
 
-  // This does not test for symmetry...should it? Or should we kill?
+  // FIXME: Does not test for symmetry...should it? Or should we kill it?
   def toSymmetricKeyedMatrix: SymmetricKeyedMatrix = {
     if (rowKeys != colKeys)
       fatal("Row keys must match column keys")
@@ -370,15 +379,15 @@ object SymmetricKeyedMatrix {
 
   def read(hc: HailContext, uri: String): SymmetricKeyedMatrix = {
     val keys = Keys.read(hc, uri + keysRelativePath)
-    val hm = HailMatrix.read(hc, uri + hailMatrixRelativePath, 1)
+    val hm = HailMatrix.read(hc, uri + hailMatrixRelativePath)
     
     SymmetricKeyedMatrix(keys, hm)
   }
 }
 
 case class SymmetricKeyedMatrix(keys: Keys, hm: HailMatrix) {
-  def nRows: Int = hm.nRows
-  def nCols: Int = hm.nCols
+  def nRows: Long = hm.nRows
+  def nCols: Long = hm.nCols
 
   def transpose: SymmetricKeyedMatrix = SymmetricKeyedMatrix(keys, hm.transpose)
   
@@ -397,13 +406,10 @@ case class SymmetricKeyedMatrix(keys: Keys, hm: HailMatrix) {
   def scalarAdd(e: Double): SymmetricKeyedMatrix = SymmetricKeyedMatrix(keys, hm.scalarAdd(e))
   def scalarMultiply(e: Double): SymmetricKeyedMatrix = SymmetricKeyedMatrix(keys, hm.scalarMultiply(e))
 
-  // FIXME: don't evaluate pred twice and filter more intelligently than two passes
-  def filter(pred: Annotation => Boolean): Option[SymmetricKeyedMatrix] = {
+  // FIXME: don't evaluate pred twice. filter in one pass
+  def filter(pred: Annotation => Boolean): SymmetricKeyedMatrix = {
     val indexPred = keys.values.map(pred)
-
-    hm.filterRows(indexPred)
-      .flatMap(_.filterCols(indexPred))
-      .map(SymmetricKeyedMatrix(keys.filter(pred), _))
+    SymmetricKeyedMatrix(keys.filter(pred), hm.filterRows(indexPred).filterCols(indexPred))
   }
   
   def write(hc: HailContext, uri: String): Unit = {
@@ -419,12 +425,17 @@ case class SymmetricKeyedMatrix(keys: Keys, hm: HailMatrix) {
   
   def toKeyedMatrix: KeyedMatrix = KeyedMatrix(keys, keys, hm)
     
-  def eigen: Eigen = fatal("Not implemented")
+  def eigen: Eigen = hm match {
+    case HailLocalMatrix(m) =>
+      info(s"Computing eigendecomposition of $nRows x $nCols matrix...")
+      val eig = printTime(eigSymD(m))
+      val km = KeyedMatrix(keys, Keys.ofDim(keys.length), HailLocalMatrix(eig.eigenvectors))
+      val hv = HailVector(eig.eigenvalues)
+      Eigen(km, hv)
+    case _: HailBlockMatrix => fatal("Eigendecomposition requires local matrix")
+    case _: HailIndexedRowMatrix => fatal("Eigendecomposition requires local matrix")
+  }
 }
-
-
-
-
 
 
 object Eigen {
@@ -439,18 +450,34 @@ object Eigen {
   }
 }
 
-case class Eigen(km: KeyedMatrix, eigenvalues: HailVector) {
+case class Eigen(eigenvectors: KeyedMatrix, eigenvalues: HailVector) {
+  require(eigenvectors.nCols == eigenvalues.length) // also (re)enforces nCols < Int.MaxValue
   
-  def dropThreshold: Eigen = fatal("Not implemented")
-  
-  def dropProportion: Eigen = fatal("Not implemented")
-  
-  def takeTop: Eigen = fatal("Not implemented")
-  
+  def nRows: Long  = eigenvectors.nRows
+  def nCols: Int = eigenvectors.nCols.toInt
+  def nEigs: Int = nCols
+
+  // FIXME: don't evaluate pred twice
+  def filterEigenvalues(pred: Double => Boolean): Eigen = {
+    val evects = eigenvectors.filterCols(i => pred(eigenvalues(i)))
+    val evals = HailVector(DenseVector(eigenvalues.v.toArray.filter(pred)))
+    Eigen(evects, evals)
+  }
+
+  def takeTop(k: Int): Eigen = { // relies on increasing order
+    if (! (k > 0 && k < nCols))
+      fatal(s"k must be strictly between 0 and the number of eigenvectors $nEigs, got $k")
+    
+    val evects = eigenvectors.filterCols(i => i.asInstanceOf[Int] >= nCols - k) // can be made more efficient
+    val evals = eigenvalues.slice(nCols - k, nCols)
+    
+    Eigen(evects, evals)
+  }
+   
   def write(hc: HailContext, uri: String): Unit = {
     import Eigen._
     
-    km.write(hc: HailContext, uri + keyedMatrixRelativePath)
+    eigenvectors.write(hc: HailContext, uri + keyedMatrixRelativePath)
     eigenvalues.write(hc: HailContext, uri + eigenvaluesRelativePath)
   }
 }
