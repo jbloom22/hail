@@ -4,7 +4,10 @@ import breeze.linalg._
 import breeze.stats.mean
 import is.hail.{SparkSuite, TestUtils, stats}
 import is.hail.annotations.Annotation
+import is.hail.distributedmatrix.DistributedMatrix
 import is.hail.expr.TString
+import is.hail.utils._
+import org.apache.spark.mllib.linalg.distributed.BlockMatrix
 import org.testng.annotations.Test
 
 class EigenSuite extends SparkSuite {
@@ -77,7 +80,7 @@ class EigenSuite extends SparkSuite {
   }
   
   // comparison over non-zero eigenvalues
-  @Test def testToEigenDistributedRMM() {
+  @Test def testToEigenDistributedRRM() {
     def testMatrix(G: DenseMatrix[Int], H: DenseMatrix[Double]) {
       for (i <- 0 until H.cols) {
         H(::, i) -= mean(H(::, i))
@@ -131,5 +134,34 @@ class EigenSuite extends SparkSuite {
     testMatrix(G1, H1)
     testMatrix(G2, convert(G2, Double))
     testMatrix(G3, convert(G3, Double))
+  }
+  
+  @Test def testProjectGenotypes() {
+    val evects = new DenseMatrix(3, 2,
+      Array(math.sqrt(0.3),  math.sqrt(0.3), -math.sqrt(0.4),
+            math.sqrt(0.1), -math.sqrt(0.4), -math.sqrt(0.5)))
+    
+    val G = DenseMatrix((0, 1),
+                        (2, 1),
+                        (0, 2))
+
+    val vds = stats.vdsFromGtMatrix(hc)(G)
+
+    val eig = Eigen(TString, Array("A", "B", "C").map(_.asInstanceOf[Annotation]), evects, DenseVector(1.0, 0.1))
+      .distribute(sc)
+    
+    val genotypes_uri = tmpDir.createTempFile("genotype.matrix")
+    val projection_uri = tmpDir.createTempFile("projection.matrix")
+    
+    vds.writeGenotypes(genotypes_uri)
+    eig.projectGenotypes(hc, genotypes_uri, projection_uri)
+    
+    import is.hail.distributedmatrix.DistributedMatrix.implicits._
+    val dm = DistributedMatrix[BlockMatrix]
+
+    val P1 = convert(G, Double).t * evects
+    val P2 = dm.read(hc, projection_uri).toLocalMatrix().asBreeze()
+        
+    TestUtils.assertMatrixEqualityDouble(P1, P2)
   }
 }

@@ -6,18 +6,20 @@ import is.hail.HailContext
 import is.hail.annotations._
 import is.hail.expr._
 import is.hail.annotations.{Annotation, _}
+import is.hail.distributedmatrix.DistributedMatrix
 import is.hail.expr.{EvalContext, JSONAnnotationImpex, Parser, SparkAnnotationImpex, TAggregable, TString, TStruct, Type, _}
 import is.hail.io.plink.ExportBedBimFam
 import is.hail.io.vcf.{BufferedLineIterator, ExportVCF}
 import is.hail.keytable.KeyTable
 import is.hail.methods._
 import is.hail.sparkextras.{OrderedPartitioner, OrderedRDD}
-import is.hail.stats.{ComputeRRM, Eigen, EigenDistributed}
+import is.hail.stats.{ComputeRRM, Eigen, EigenDistributed, ToIndexedRowMatrix}
 import is.hail.utils._
 import is.hail.variant.Variant.orderedKey
 import org.apache.hadoop
 import org.apache.kudu.spark.kudu._
 import org.apache.kudu.spark.kudu.{KuduContext, _}
+import org.apache.spark.mllib.linalg.distributed.BlockMatrix
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.types.{ArrayType, StringType, StructField, StructType}
@@ -630,12 +632,22 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
     runAssoc: Boolean = true,
     delta: Option[Double] = None,
     useDosages: Boolean = false,
-    pathToProjection: Option[String] = None,
+    projection_uri: Option[String] = None,
     blockSize: Int = 128): VariantDataset = {
 
     requireSplit("linear mixed regression")
     LinearMixedRegression.applyEigenDistributed(vds, eigenDist, y, covariates, useML, rootGA, rootVA,
-      runAssoc, delta, useDosages, pathToProjection: Option[String], blockSize)
+      runAssoc, delta, useDosages, projection_uri: Option[String], blockSize)
+  }
+    
+  def writeGenotypes(uri: String, useDosages: Boolean = false) {
+    val G = ToIndexedRowMatrix(vds, useDosages, sampleMask = null, completeSampleIndex = (0 until vds.nSamples).toArray)
+      .toBlockMatrixDense()
+
+    import is.hail.distributedmatrix.DistributedMatrix.implicits._
+    val dm = DistributedMatrix[BlockMatrix]
+    
+    dm.write(G, uri)
   }
 
   def logreg(test: String,
