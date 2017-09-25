@@ -334,15 +334,15 @@ object BlockMatrixIsDistributedMatrix extends DistributedMatrix[BlockMatrix] {
     val hadoop = m.blocks.sparkContext.hadoopConfiguration
     hadoop.mkDir(uri)
 
-    m.blocks.map { case ((i, j), m) =>
-      (new PairWriter(i, j), new MatrixWriter(m.numRows, m.numCols, m.toArray)) }
-      .saveAsSequenceFile(uri+matrixRelativePath)
-
     hadoop.writeDataFile(uri+metadataRelativePath) { os =>
       jackson.Serialization.write(
         BlockMatrixMetadata(m.rowsPerBlock, m.colsPerBlock, m.numRows(), m.numCols()),
         os)
     }
+    
+    m.blocks.map { case ((i, j), m) =>
+      (new PairWriter(i, j), new MatrixWriter(m.numRows, m.numCols, m.toArray)) }
+      .saveAsSequenceFile(uri+matrixRelativePath)
   }
 
   /**
