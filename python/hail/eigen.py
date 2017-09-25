@@ -240,16 +240,14 @@ class EigenDistributed:
         jeigen = Env.hail().stats.EigenDistributed.read(Env.hc()._jhc, path)
         return EigenDistributed(jeigen)
     
-    @typecheck_method(path=strlike,
-                      vds=anytype,
-                      y=nullable(strlike),
-                      covariates=listof(strlike),
-                      use_dosages=bool)
-    def project_and_write(self, path, vds, y=None, covariates=[], use_dosages=False):
-        """Project complete samples of vds using eigenvectors and write to disk.
+    @typecheck_method(genotypes_path=strlike,
+                      projection_path=strlike)
+    def project_genotypes(self, genotypes_path, projection_path):
+        """Project genotype matrix to eigenspace.
         
+        >>> vds.write_genotypes('output/genotype.matrix')
         >>> eig = vds.rrm().eigen().distribute()
-        >>> eig.project_and_write('output/example.proj', vds)
+        >>> eig.project_genotypes('output/genotype.matrix', 'output/projection.matrix')
         """
         
-        return self._jeigen.projectAndWrite(path, vds._jvds, joption(y), jarray(Env.jvm().java.lang.String, covariates), use_dosages)
+        self._jeigen.projectGenotypes(Env.hc()._jhc, genotypes_path, projection_path)

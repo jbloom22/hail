@@ -583,20 +583,26 @@ class LinearMixedRegressionSuite extends SparkSuite {
     val vdsFastLMMDownsampled = vdsFastLMM.sampleVariants(0.5)
     val rrm = vdsFastLMMDownsampled.rrm()
     val ld = vdsFastLMMDownsampled.ldMatrix()
-    
+
     val eigenFromRRM = rrm.eigen().takeTop(230).distribute(sc)
     val eigenFromLD = ld.eigen().takeTop(230).toEigenDistributedRRM(vdsFastLMMDownsampled, Some(ld.nSamples))
+
+    val fileGenotypes = tmpDir.createTempFile("genotypes.matrix")
     
-    val fileRRM = tmpDir.createTempFile("testRRM", extension = ".proj")
-    val fileLD = tmpDir.createTempFile("testLD", extension = ".proj")
+    vdsFastLMMDownsampled.writeGenotypes(fileGenotypes)
+    
+    val fileProjRRM = tmpDir.createTempFile("projection.rrm")
+    val fileProjLD = tmpDir.createTempFile("projection.ld")
+    
+    eigenFromRRM.projectGenotypes(hc, fileGenotypes, fileProjRRM)
+    eigenFromLD.projectGenotypes(hc, fileGenotypes, fileProjLD)
 
-    eigenFromRRM.projectAndWrite(fileRRM, vdsFastLMMDownsampled, Some("sa.pheno"),  Array("sa.cov"), useDosages = false, None)
-    eigenFromLD.projectAndWrite(fileLD, vdsFastLMMDownsampled, Some("sa.pheno"),  Array("sa.cov"), useDosages = false, None)
-
-    val vdsLD230 = vdsFastLMMDownsampled.lmmregEigenDistributed(eigenFromLD, "sa.pheno", Array("sa.cov"), delta = None)
-    val vdsRRM230 = vdsFastLMMDownsampled.lmmregEigenDistributed(eigenFromRRM, "sa.pheno", Array("sa.cov"), delta = None)
-    val vdsLD230Read = vdsFastLMMDownsampled.lmmregEigenDistributed(eigenFromLD, "sa.pheno", Array("sa.cov"), delta = None, pathToProjection = Some(fileLD))
-    val vdsRRM230Read = vdsFastLMMDownsampled.lmmregEigenDistributed(eigenFromRRM, "sa.pheno", Array("sa.cov"), delta = None, pathToProjection = Some(fileRRM))
+    val vdsLD230 = vdsFastLMMDownsampled.lmmregEigenDistributed(eigenFromLD, "sa.pheno", Array("sa.cov"))
+    val vdsRRM230 = vdsFastLMMDownsampled.lmmregEigenDistributed(eigenFromRRM, "sa.pheno", Array("sa.cov"))
+    val vdsLD230Read = vdsFastLMMDownsampled.lmmregEigenDistributed(eigenFromLD, "sa.pheno", Array("sa.cov"), 
+      projection_uri = Some(fileProjLD))
+    val vdsRRM230Read = vdsFastLMMDownsampled.lmmregEigenDistributed(eigenFromRRM, "sa.pheno", Array("sa.cov"),
+      projection_uri = Some(fileProjRRM))
 
     compareGlobalLMM(vdsLD230, vdsRRM230)
     compareGlobalLMM(vdsLD230, vdsLD230Read)

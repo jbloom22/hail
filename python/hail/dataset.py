@@ -3321,11 +3321,11 @@ class VariantDataset(object):
                       use_ml=bool,
                       delta=nullable(numeric),
                       use_dosages=bool,
-                      path_to_projection=nullable(strlike),
+                      projected_genotypes=nullable(strlike),
                       variant_block_size=integral)
     def lmmreg_eigen_distributed(self, eigen_distributed, y, covariates=[], global_root="global.lmmreg",
                                  va_root="va.lmmreg", run_assoc=True, use_ml=False, delta=None, use_dosages=False, 
-                                 path_to_projection=None, variant_block_size=16):
+                                 projected_genotypes=None, variant_block_size=16):
         """Use a kinship-based linear mixed model to estimate the genetic component of phenotypic variance (narrow-sense heritability) and optionally test each variant for association. This method is more scalable than :py:meth:`~hail.VariantDataset.lmmreg`.
 
         .. include:: requireTGenotype.rst
@@ -3347,8 +3347,22 @@ class VariantDataset(object):
         jvds = self._jvdf.lmmregEigenDistributed(eigen_distributed._jeigen, y,
                                                  jarray(Env.jvm().java.lang.String, covariates), use_ml, global_root,
                                                  va_root, run_assoc, joption(delta), use_dosages, 
-                                                 joption(path_to_projection), variant_block_size)
+                                                 joption(projected_genotypes), variant_block_size)
         return VariantDataset(self.hc, jvds)
+
+    @handle_py4j
+    @requireTGenotype
+    @typecheck_method(output=strlike,
+                      use_dosages=bool)
+    def write_genotypes(self, output, use_dosages=False):
+        """Export matrix of genotypes as a BlockMatrix (rows are variants, samples are columns).
+        
+        :param str output: Path at which to write block matrix.
+        
+        :param bool use_dosages: If true, use dosages rather than hard call genotypes.
+        """
+        
+        self._jvdf.writeGenotypes(output, use_dosages)
 
     @handle_py4j
     @requireTGenotype

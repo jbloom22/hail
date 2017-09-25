@@ -365,7 +365,7 @@ object EigenDistributed {
     assert(nRows == rowIds.length)
     
     val evalsData = Array.ofDim[Double](nEigs)
-        
+    
     val dm = DistributedMatrix[BlockMatrix]
     val evects = dm.read(hc, uri + evectsRelativePath)
 
@@ -431,24 +431,13 @@ case class EigenDistributed(rowSignature: Type, rowIds: Array[Annotation], evect
     hadoop.writeTextFile(uri + metadataRelativePath)(Serialization.writePretty(json, _))
   }
   
-  // FIXME need to verify useDosages is same
-  // FIXME passing in y and cov is a hack, it should take the complete samples, or be pre-filtered
-  def projectAndWrite(path: String, vds: VariantDataset, optYExpr: Option[String], covExpr: Array[String], useDosages: Boolean) {
-    val yExpr = optYExpr.getOrElse("rnorm(0, 1)") // FIXME: hack
-    val (_, _, completeSamples) = RegressionUtils.getPhenoCovCompleteSamples(vds, yExpr, covExpr)
-    val completeSamplesSet = completeSamples.toSet
-    val sampleMask = vds.sampleIds.map(completeSamplesSet).toArray
-    val completeSampleIndex = (0 until vds.nSamples).filter(sampleMask).toArray
-
-    if (!completeSamples.sameElements(rowIds))
-      fatal("Complete samples in the dataset must coincide with rows IDs of eigenvectors, in the same order.")
-
+  def projectGenotypes(hc: HailContext, genotypes_uri: String, projection_uri: String) {
     val dm = DistributedMatrix[BlockMatrix]
     import dm.ops._
 
-    val G = ToIndexedRowMatrix(vds, useDosages, sampleMask, completeSampleIndex)
-    val projG = G.toBlockMatrixDense() * evects
 
-    dm.write(projG, path)
+    val G = dm.read(hc, genotypes_uri)
+    
+    dm.write(G * evects, projection_uri)
   }
 }
