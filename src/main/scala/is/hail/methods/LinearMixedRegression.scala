@@ -132,7 +132,6 @@ object LinearMixedRegression {
 
       info(s"lmmreg: Computing statistics for each variant...")
 
-      val blockSize = 128
       val useFullRank = nEigs == n
 
       val newRDD =
