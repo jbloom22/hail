@@ -288,7 +288,7 @@ object BlockMatrixIsDistributedMatrix extends DistributedMatrix[BlockMatrix] {
   def write(m: M, uri: String) {
     val hadoop = m.blocks.sparkContext.hadoopConfiguration
     hadoop.mkDir(uri)
-
+    
     writeBlocks(m, uri)
     
     hadoop.writeDataFile(uri+metadataRelativePath) { os =>
@@ -320,7 +320,7 @@ object BlockMatrixIsDistributedMatrix extends DistributedMatrix[BlockMatrix] {
       sHadoopConfBc.value.value.writeDataFile(uri + "/blocks/block-" + pis) { out =>
         it.foreach { case ((iblock, jblock), dm) => // will have one block per partition
 
-          new MatrixWriter(dm.numRows, dm.numCols, dm.toArray).write(out)
+          new MatrixWriter(dm.numRows, dm.numCols, dm.toArray).write(out) // change to toArrayShallow once using HailBlockMatrix
           
           localBlockCount += 1
         }

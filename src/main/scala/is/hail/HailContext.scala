@@ -56,6 +56,7 @@ object HailContext {
         "org.apache.hadoop.io.compress.GzipCodec")
 
     conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+    conf.set("spark.kryo.registrator", "is.hail.kryo.HailKryoRegistrator")
 
     conf.set("spark.sql.parquet.compression.codec", parquetCompression)
     conf.set("spark.sql.files.openCostInBytes", tera.toString)
