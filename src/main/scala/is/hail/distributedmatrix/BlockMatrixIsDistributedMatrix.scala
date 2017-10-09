@@ -6,11 +6,13 @@ import org.apache.spark._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.mllib.linalg._
 import org.apache.spark.mllib.linalg.distributed._
+import breeze.linalg.{DenseMatrix => BDM}
+
 import org.apache.hadoop.io._
 import java.io._
 
+import is.hail.utils.richUtils.RichDenseMatrixDouble
 import org.json4s._
-
 import org.apache.commons.lang3.StringUtils
 
 import scala.reflect.ClassTag
@@ -288,7 +290,7 @@ object BlockMatrixIsDistributedMatrix extends DistributedMatrix[BlockMatrix] {
   def write(m: M, uri: String) {
     val hadoop = m.blocks.sparkContext.hadoopConfiguration
     hadoop.mkDir(uri)
-    
+
     writeBlocks(m, uri)
     
     hadoop.writeDataFile(uri+metadataRelativePath) { os =>
@@ -318,19 +320,21 @@ object BlockMatrixIsDistributedMatrix extends DistributedMatrix[BlockMatrix] {
       val pis = StringUtils.leftPad(is, d, "0")
 
       sHadoopConfBc.value.value.writeDataFile(uri + "/blocks/block-" + pis) { out =>
-        it.foreach { case ((iblock, jblock), dm) => // will have one block per partition
+        assert(it.hasNext)
+        val ((iblock, jblock), dm) = it.next()
+        assert(!it.hasNext)
 
-          new MatrixWriter(dm.numRows, dm.numCols, dm.toArray).write(out) // change to toArrayShallow once using HailBlockMatrix
-          
-          localBlockCount += 1
-        }
+        dm.asBreeze().asInstanceOf[BDM[Double]].write(out) // FIXME: simplify once rebased on HailBlockMatrix
+        
+        localBlockCount += 1
       }
 
       Iterator.single(localBlockCount)
     }
       .fold(0L)(_ + _)
 
-    info(s"wrote $blockCount blocks") // should equal number of partitions
+    info(s"wrote $blockCount blocks")
+    assert(blockCount == nPartitions)
   }
 
   /**
@@ -377,11 +381,11 @@ class ReadBlocksRDD(sc: SparkContext, uri: String, nRowBlocks: Int, nColBlocks: 
     val pis = StringUtils.leftPad(is, d, "0")
 
     Iterator.single(sHadoopConfBc.value.value.readDataFile(uri + "/blocks/block-" + pis) { in =>
-      val mw = new MatrixWriter()
-      mw.readFields(in)
+      
+      val bdm = RichDenseMatrixDouble.read(in)
       
       // block indices are column major
-      ((i % nRowBlocks, i / nRowBlocks), mw.toDenseMatrix())
+      ((i % nRowBlocks, i / nRowBlocks), new DenseMatrix(bdm.rows, bdm.cols, bdm.data))
     })
   }
 
@@ -390,50 +394,3 @@ class ReadBlocksRDD(sc: SparkContext, uri: String, nRowBlocks: Int, nColBlocks: 
 
 // must be top-level for Jackson to serialize correctly
 case class BlockMatrixMetadata(rowsPerBlock: Int, colsPerBlock: Int, numRows: Long, numCols: Long)
-
-class PairWriter(var i: Int, var j: Int) extends Writable {
-  def this() {
-    this(0,0)
-  }
-
-  def write(out: DataOutput) {
-    out.writeInt(i)
-    out.writeInt(j)
-  }
-
-  def readFields(in: DataInput) {
-    i = in.readInt()
-    j = in.readInt()
-  }
-}
-
-class MatrixWriter(var rows: Int, var cols: Int, var m: Array[Double]) extends Writable {
-  def this() {
-    this(0, 0, null)
-  }
-
-  def write(out: DataOutput) {
-    out.writeInt(rows)
-    out.writeInt(cols)
-    var i = 0
-    while (i < rows * cols) {
-      out.writeDouble(m(i))
-      i += 1
-    }
-  }
-
-  def readFields(in: DataInput) {
-    rows = in.readInt()
-    cols = in.readInt()
-    m = new Array[Double](rows * cols)
-    var i = 0
-    while (i < rows * cols) {
-      m(i) = in.readDouble()
-      i += 1
-    }
-  }
-
-  def toDenseMatrix(): DenseMatrix = {
-    new DenseMatrix(rows, cols, m)
-  }
-}
