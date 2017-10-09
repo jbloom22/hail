@@ -41,6 +41,7 @@ object Eigen {
   private val evectsRelativePath = "/evects"
   private val evalsRelativePath = "/evals"
   
+  // FIXME: Don't replicate read and write on BDM
   def read(hc: HailContext, uri: String): Eigen = {
     if (!uri.endsWith(".eig") && !uri.endsWith(".eig/"))
       fatal(s"input path ending in `.eig' required, found `$uri'")
@@ -159,6 +160,7 @@ case class Eigen(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMat
         evects(::, (nEvects - k) until nEvects).copy, evals((nEvects - k) until nEvects).copy)
   }
 
+  // FIXME: avoid copy if no drop
   def dropProportion(proportion: Double = 1e-6): Eigen = {
     if (proportion < 0 || proportion >= 1)
       fatal(s"Relative threshold must be in range [0,1), got $proportion")
@@ -175,7 +177,8 @@ case class Eigen(rowSignature: Type, rowIds: Array[Annotation], evects: DenseMat
     
     Eigen(rowSignature, rowIds, evects(::, i until nEvects).copy, evals(i until nEvects).copy)
   }
-  
+
+  // FIXME: avoid copy if no drop
   def dropThreshold(threshold: Double = 1e-6): Eigen = {
     if (threshold < 0)
       fatal(s"Threshold must be non-negative, got $threshold")

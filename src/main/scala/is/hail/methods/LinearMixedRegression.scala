@@ -104,7 +104,7 @@ object LinearMixedRegression {
     val S = evals
     val nEigs = S.length
 
-    info(s"lmmreg: Using $nEigs")
+    info(s"lmmreg: Using $nEigs eigenvectors")
     info(s"lmmreg: Evals 1 to ${ math.min(20, nEigs) }: " + ((nEigs - 1) to math.max(0, nEigs - 20) by -1).map(S(_).formatted("%.5f")).mkString(", "))
     info(s"lmmreg: Evals $nEigs to ${ math.max(1, nEigs - 20) }: " + (0 until math.min(nEigs, 20)).map(S(_).formatted("%.5f")).mkString(", "))
 
@@ -424,7 +424,7 @@ object LinearMixedRegression {
           val scalarLMMBc = sc.broadcast(scalarLMM)
 
           val projG = pathToProjection match {
-            case Some(path) => dm.read(vds1.hc, path)
+            case Some(path) => dm.read(vds1.hc, path) // FIXME: appears to be read as a ShuffledRDD
             case None =>
               val G = ToIndexedRowMatrix(vds1, useDosages, sampleMask, completeSampleIndex, Some(variants.length))
               G.toBlockMatrixDense() * Ut.t
@@ -434,7 +434,7 @@ object LinearMixedRegression {
             fatal(s"Dimension mismatch: projection matches ${projG.numRows()} variants, but there are ${variants.length} variants.")
           if (projG.numCols() != eigenDist.nEvects)
             fatal(s"Dimension mismatch: projection matches ${projG.numCols()} eigenvectors, but there are ${eigenDist.nEvects} eigenvectors.")
-           
+          
           val projG1 = projG
             .toIndexedRowMatrixOrderedPartitioner(intOrderedPartitioner)
             .rows
@@ -554,16 +554,19 @@ object DiagLMM {
         }
       }
 
+      val logLkhdFunction = if (useML) LogLkhdML else LogLkhdREML
+
       // number of points per unit of log space
       val pointsPerUnit = 100
       val minLogDelta = -8
       val maxLogDelta = 8
-
-      // avoids rounding of (minLogDelta to logMax by logres)
+      
       val grid = (minLogDelta * pointsPerUnit to maxLogDelta * pointsPerUnit).map(_.toDouble / pointsPerUnit)
-      val logLkhdFunction = if (useML) LogLkhdML else LogLkhdREML
 
-      val gridLogLkhd = grid.map(logDelta => (logDelta, logLkhdFunction.value(logDelta)))
+      val gridLogLkhd = grid
+        .par
+        .map(logDelta => (logDelta, logLkhdFunction.value(logDelta)))
+        .toIndexedSeq
 
       val header = "logDelta\tlogLkhd"
       val gridValsString = gridLogLkhd.map { case (d, nll) => s"$d\t$nll" }.mkString("\n")
