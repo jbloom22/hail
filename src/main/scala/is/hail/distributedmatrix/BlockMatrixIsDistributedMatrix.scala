@@ -307,7 +307,7 @@ object BlockMatrixIsDistributedMatrix extends DistributedMatrix[BlockMatrix] {
     
     hadoopConf.mkDir(uri + "/blocks")
     
-    val sHadoopConfBc = sc.broadcast(new SerializableHadoopConfiguration(hadoopConf))
+    val sHadoopConf = new SerializableHadoopConfiguration(hadoopConf)
     
     val nPartitions = blocks.getNumPartitions
     val d = digitsNeeded(nPartitions)
@@ -319,7 +319,7 @@ object BlockMatrixIsDistributedMatrix extends DistributedMatrix[BlockMatrix] {
       assert(is.length <= d)
       val pis = StringUtils.leftPad(is, d, "0")
 
-      sHadoopConfBc.value.value.writeDataFile(uri + "/blocks/block-" + pis) { out =>
+      sHadoopConf.value.writeDataFile(uri + "/blocks/block-" + pis) { out =>
         assert(it.hasNext)
         val ((iblock, jblock), dm) = it.next()
         assert(!it.hasNext)
@@ -369,7 +369,7 @@ class ReadBlocksRDD(sc: SparkContext, uri: String, nRowBlocks: Int, nColBlocks: 
   override def getPartitions: Array[Partition] =
     Array.tabulate(nBlocks)(i => ReadBlocksRDDPartition(i))
   
-  private val sHadoopConfBc = sc.broadcast(new SerializableHadoopConfiguration(sc.hadoopConfiguration))
+  private val sHadoopConf = new SerializableHadoopConfiguration(sc.hadoopConfiguration)
 
   override def compute(split: Partition, context: TaskContext): Iterator[((Int, Int), Matrix)] = {
     val d = digitsNeeded(nBlocks)
@@ -380,7 +380,7 @@ class ReadBlocksRDD(sc: SparkContext, uri: String, nRowBlocks: Int, nColBlocks: 
     assert(is.length <= d)
     val pis = StringUtils.leftPad(is, d, "0")
 
-    Iterator.single(sHadoopConfBc.value.value.readDataFile(uri + "/blocks/block-" + pis) { in =>
+    Iterator.single(sHadoopConf.value.readDataFile(uri + "/blocks/block-" + pis) { in =>
       
       val bdm = RichDenseMatrixDouble.read(in)
       
