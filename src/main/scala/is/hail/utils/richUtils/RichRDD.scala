@@ -1,7 +1,10 @@
 package is.hail.utils.richUtils
 
+import java.io.OutputStream
+
 import is.hail.sparkextras.ReorderedPartitionsRDD
 import is.hail.utils._
+import org.apache.commons.lang3.StringUtils
 import org.apache.hadoop
 import org.apache.hadoop.io.compress.CompressionCodecFactory
 import org.apache.spark.{NarrowDependency, Partition, TaskContext}
@@ -98,5 +101,33 @@ class RichRDD[T](val r: RDD[T]) extends AnyVal {
       def compute(split: Partition, context: TaskContext): Iterator[T] =
         r.compute(split.asInstanceOf[SubsetRDDPartition].parentPartition, context)
     }
+  }
+  
+  def write(uri: String, writePartition: (OutputStream, Iterator[T]) => Int) {
+    val sc = r.sparkContext
+    val hadoopConf = sc.hadoopConfiguration
+    
+    hadoopConf.mkDir(uri)
+    
+    val sHadoopConf = new SerializableHadoopConfiguration(hadoopConf)
+    
+    val nPartitions = r.getNumPartitions
+    val d = digitsNeeded(nPartitions)
+
+    val totalItems = r.mapPartitionsWithIndex { case (i, it) =>
+      val is = i.toString
+      assert(is.length <= d)
+      val pis = StringUtils.leftPad(is, d, "0")
+
+      var itemsInPartition = 0L
+      sHadoopConf.value.writeDataFile(uri + "/part-" + pis) { out =>
+        itemsInPartition += writePartition(out, it)
+      }
+      
+      Iterator.single(itemsInPartition)
+    }
+      .fold(0L)(_ + _)
+  
+    info(s"wrote $totalItems items across $nPartitions partitions")
   }
 }

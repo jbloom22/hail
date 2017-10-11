@@ -1,14 +1,14 @@
 package is.hail.distributedmatrix
 
+import java.io.{DataOutputStream, OutputStream}
+
 import is.hail._
 import is.hail.utils._
 import org.apache.spark._
 import org.apache.spark.rdd.RDD
-
 import breeze.linalg.{DenseMatrix => BDM}
 import org.apache.spark.mllib.linalg._
 import org.apache.spark.mllib.linalg.distributed._
-
 import is.hail.utils.richUtils.RichDenseMatrixDouble
 import org.json4s._
 import org.apache.commons.lang3.StringUtils
@@ -288,8 +288,8 @@ object BlockMatrixIsDistributedMatrix extends DistributedMatrix[BlockMatrix] {
   def write(m: M, uri: String) {
     val hadoop = m.blocks.sparkContext.hadoopConfiguration
     hadoop.mkDir(uri)
-
-    writeBlocks(m, uri)
+    
+    m.blocks.write(uri + "/blocks", writeBlock)
     
     hadoop.writeDataFile(uri+metadataRelativePath) { os =>
       jackson.Serialization.write(
@@ -297,38 +297,13 @@ object BlockMatrixIsDistributedMatrix extends DistributedMatrix[BlockMatrix] {
         os)
     }
   }
-  
-  def writeBlocks(m: M, uri: String) {
-    val blocks = m.blocks
-    val sc = blocks.sparkContext
-    val hadoopConf = sc.hadoopConfiguration
+
+  def writeBlock(out: OutputStream, it: Iterator[((Int, Int), Matrix)]): Int = {
+    assert(it.hasNext)
+    it.next()._2.asBreeze().asInstanceOf[BDM[Double]].write(new DataOutputStream(out))
+    assert(!it.hasNext)
     
-    hadoopConf.mkDir(uri + "/blocks")
-    
-    val sHadoopConf = new SerializableHadoopConfiguration(hadoopConf)
-    
-    val nPartitions = blocks.getNumPartitions
-    val d = digitsNeeded(nPartitions)
-
-    val blockCount = blocks.mapPartitionsWithIndex { case (i, it) =>
-      val is = i.toString
-      assert(is.length <= d)
-      val pis = StringUtils.leftPad(is, d, "0")
-
-      sHadoopConf.value.writeDataFile(uri + "/blocks/block-" + pis) { out =>
-        assert(it.hasNext)
-        val ((iblock, jblock), sparkMat) = it.next()
-        assert(!it.hasNext)
-
-        sparkMat.asBreeze().asInstanceOf[BDM[Double]].write(out)
-      }
-
-      Iterator.single(1L)
-    }
-      .fold(0L)(_ + _)
-
-    info(s"wrote $blockCount blocks")
-    assert(blockCount == nPartitions)
+    1
   }
 
   /**
@@ -374,7 +349,7 @@ class ReadBlocksRDD(sc: SparkContext, uri: String, nRowBlocks: Int, nColBlocks: 
     assert(is.length <= d)
     val pis = StringUtils.leftPad(is, d, "0")
 
-    Iterator.single(sHadoopConf.value.readDataFile(uri + "/blocks/block-" + pis) { in =>
+    Iterator.single(sHadoopConf.value.readDataFile(uri + "/blocks/part-" + pis) { in =>
       
       val bdm = RichDenseMatrixDouble.read(in)
       
