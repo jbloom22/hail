@@ -1,11 +1,14 @@
 package is.hail.utils.richUtils
 
+import java.io.{DataInputStream, DataOutputStream}
+
 import is.hail.sparkextras.ReorderedPartitionsRDD
 import is.hail.utils._
 import org.apache.hadoop
 import org.apache.hadoop.io.compress.CompressionCodecFactory
 import org.apache.spark.{NarrowDependency, Partition, TaskContext}
 import org.apache.spark.rdd.RDD
+import org.apache.commons.lang3.StringUtils
 
 import scala.reflect.ClassTag
 import scala.collection.mutable
@@ -98,5 +101,34 @@ class RichRDD[T](val r: RDD[T]) extends AnyVal {
       def compute(split: Partition, context: TaskContext): Iterator[T] =
         r.compute(split.asInstanceOf[SubsetRDDPartition].parentPartition, context)
     }
+  }
+  
+  def write(uri: String, writeElement: (DataOutputStream, T) => Unit): Long = {
+    val sc = r.sparkContext
+    val hadoopConf = sc.hadoopConfiguration
+    
+    hadoopConf.mkDir(uri + "/parts")
+    
+    val sHadoopConf = new SerializableHadoopConfiguration(hadoopConf)
+    
+    val nPartitions = r.getNumPartitions
+    val d = digitsNeeded(nPartitions)
+
+    r.mapPartitionsWithIndex { case (i, it) =>
+      val is = i.toString
+      assert(is.length <= d)
+      val pis = StringUtils.leftPad(is, d, "0")
+
+      var localPartCount = 0L
+      sHadoopConf.value.writeDataFile(uri + "/parts/part-" + pis) { out =>
+        it.foreach { e =>
+          writeElement(out, e)
+          localPartCount += 1
+        }
+      }
+
+      Iterator.single(localPartCount)
+    }
+      .fold(0L)(_ + _)
   }
 }

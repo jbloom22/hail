@@ -1,14 +1,14 @@
 package is.hail.distributedmatrix
 
+import java.io.{DataInputStream, DataOutputStream}
+
 import is.hail._
 import is.hail.utils._
 import org.apache.spark._
 import org.apache.spark.rdd.RDD
-
 import breeze.linalg.{DenseMatrix => BDM}
 import org.apache.spark.mllib.linalg._
 import org.apache.spark.mllib.linalg.distributed._
-
 import is.hail.utils.richUtils.RichDenseMatrixDouble
 import org.json4s._
 import org.apache.commons.lang3.StringUtils
@@ -298,37 +298,17 @@ object BlockMatrixIsDistributedMatrix extends DistributedMatrix[BlockMatrix] {
     }
   }
   
-  def writeBlocks(m: M, uri: String) {
-    val blocks = m.blocks
-    val sc = blocks.sparkContext
-    val hadoopConf = sc.hadoopConfiguration
+  def writeElement(out: DataOutputStream, block: ((Int, Int), Matrix)) {
+    block._2.asBreeze().asInstanceOf[BDM[Double]].write(out)
+  }
+  
+  def writeBlocks(m: M, uri: String) {    
+    print("writing")
     
-    hadoopConf.mkDir(uri + "/blocks")
-    
-    val sHadoopConf = new SerializableHadoopConfiguration(hadoopConf)
-    
-    val nPartitions = blocks.getNumPartitions
-    val d = digitsNeeded(nPartitions)
-
-    val blockCount = blocks.mapPartitionsWithIndex { case (i, it) =>
-      val is = i.toString
-      assert(is.length <= d)
-      val pis = StringUtils.leftPad(is, d, "0")
-
-      sHadoopConf.value.writeDataFile(uri + "/blocks/block-" + pis) { out =>
-        assert(it.hasNext)
-        val ((iblock, jblock), sparkMat) = it.next()
-        assert(!it.hasNext)
-
-        sparkMat.asBreeze().asInstanceOf[BDM[Double]].write(out)
-      }
-
-      Iterator.single(1L)
-    }
-      .fold(0L)(_ + _)
+    val blockCount = m.blocks.write(uri, writeElement)
 
     info(s"wrote $blockCount blocks")
-    assert(blockCount == nPartitions)
+    assert(blockCount == m.numRowBlocks.toLong * m.numColBlocks)
   }
 
   /**
@@ -365,22 +345,35 @@ class ReadBlocksRDD(sc: SparkContext, uri: String, nRowBlocks: Int, nColBlocks: 
   
   private val sHadoopConf = new SerializableHadoopConfiguration(sc.hadoopConfiguration)
 
-  override def compute(split: Partition, context: TaskContext): Iterator[((Int, Int), Matrix)] = {
-    val d = digitsNeeded(nBlocks)
-    val i = split.index
-    assert(i >= 0 && i < nBlocks)
+  
+  
+  def readElement(in: DataInputStream, i: Int): ((Int, Int), Matrix) = {
+      val bdm = RichDenseMatrixDouble.read(in)
+      
+      // block indices are column major
+      ((i % nRowBlocks, i / nRowBlocks), new DenseMatrix(bdm.rows, bdm.cols, bdm.data))
+  }
+  
+  def readPartition[T](uri: String, sHadoopConf: SerializableHadoopConfiguration, i: Int, nPartitions: Int, 
+    readElement: (DataInputStream, Int) => T): Iterator[T] = {
+    
+    val d = digitsNeeded(nPartitions)
+    assert(i >= 0 && i < nPartitions)
 
     val is = i.toString
     assert(is.length <= d)
     val pis = StringUtils.leftPad(is, d, "0")
 
-    Iterator.single(sHadoopConf.value.readDataFile(uri + "/blocks/block-" + pis) { in =>
-      
-      val bdm = RichDenseMatrixDouble.read(in)
-      
-      // block indices are column major
-      ((i % nRowBlocks, i / nRowBlocks), new DenseMatrix(bdm.rows, bdm.cols, bdm.data))
+    Iterator.single(sHadoopConf.value.readDataFile(uri + "/parts/part-" + pis) { in =>
+      readElement(in, i)
     })
+  }
+  
+  
+  
+  
+  override def compute(split: Partition, context: TaskContext): Iterator[((Int, Int), Matrix)] = {
+    readPartition(uri, sHadoopConf, split.index, nBlocks, readElement)
   }
 
   override val partitioner: Option[Partitioner] = Some(GridPartitioner(nRowBlocks, nColBlocks))
