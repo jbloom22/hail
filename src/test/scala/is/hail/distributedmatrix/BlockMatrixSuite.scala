@@ -60,7 +60,8 @@ class BlockMatrixSuite extends SparkSuite {
   } yield m
 
   val blockMatrixGen = for {
-    blockSize <- Gen.interestingPosInt
+    preBlockSize <- Gen.interestingPosInt
+    blockSize = math.sqrt(preBlockSize).toInt
     m <- blockMatrixPreGen(blockSize)
   } yield m
 
@@ -375,7 +376,7 @@ class BlockMatrixSuite extends SparkSuite {
       13, 14, 15, 16))
 
     val fname = tmpDir.createTempFile("test")
-    BlockMatrix.write(m, fname)
+    m.write(fname)
     assert(m.toLocalMatrix() == BlockMatrix.read(hc, fname).toLocalMatrix())
   }
 
@@ -388,7 +389,7 @@ class BlockMatrixSuite extends SparkSuite {
       13, 14, 15, 16))
 
     val fname = tmpDir.createTempFile("test")
-    BlockMatrix.write(m.t, fname)
+    m.t.write(fname)
     assert(m.t.toLocalMatrix() == BlockMatrix.read(hc, fname).toLocalMatrix())
   }
 
@@ -396,8 +397,8 @@ class BlockMatrixSuite extends SparkSuite {
   def readWriteIdentityRandom() {
     forAll(blockMatrixGen) { (m: BlockMatrix) =>
       val fname = tmpDir.createTempFile("test")
-      println(s"blockSize=${m.blockSize}", s"rows=${m.rows}", s"cols=${m.cols}", s"trans=${m.partitioner.transposed}")
-      BlockMatrix.write(m, fname)
+      //println(s"blockSize=${m.blockSize}", s"rows=${m.rows}", s"cols=${m.cols}", s"trans=${m.partitioner.transposed}")
+      m.write(fname)
       assert(sameDoubleMatrixNaNEqualsNaN(m.toLocalMatrix(), BlockMatrix.read(hc, fname).toLocalMatrix()))
       true
     }.check()
