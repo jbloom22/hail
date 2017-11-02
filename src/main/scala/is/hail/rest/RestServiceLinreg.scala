@@ -2,12 +2,10 @@ package is.hail.rest
 
 import breeze.linalg._
 import is.hail.stats.{LinearRegressionModel, RegressionUtils}
-import is.hail.variant.{Variant, VariantDataset, _}
+import is.hail.variant.VariantDataset
 import is.hail.utils._
 import org.apache.spark.rdd.RDD
 import org.json4s.jackson.Serialization.read
-
-import scala.collection.mutable
 
 case class GetRequestLinreg(passback: Option[String],
   md_version: Option[String],

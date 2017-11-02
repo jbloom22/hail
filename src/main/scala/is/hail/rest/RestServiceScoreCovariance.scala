@@ -1,13 +1,12 @@
 package is.hail.rest
 
 import breeze.linalg._
-import is.hail.distributedmatrix.DistributedMatrix
 import is.hail.stats.RegressionUtils
 import is.hail.variant._
 import is.hail.utils._
 import is.hail.variant.VariantDataset
 import org.apache.spark.mllib.linalg.Vectors
-import org.apache.spark.mllib.linalg.distributed.{BlockMatrix, IndexedRow, IndexedRowMatrix}
+import org.apache.spark.mllib.linalg.distributed.{IndexedRow, IndexedRowMatrix}
 import org.json4s.jackson.Serialization.read
 
 import scala.collection.mutable
@@ -74,11 +73,6 @@ class RestServiceScoreCovariance(vds: VariantDataset, covariates: Array[String],
           s"${ (sv.chrom.getOrElse("NA"), sv.pos.getOrElse("NA"), sv.ref.getOrElse("NA"), sv.alt.getOrElse("NA")) }")
       }
     }
-
-    // pull up?
-    import is.hail.distributedmatrix.DistributedMatrix.implicits._
-    val dm = DistributedMatrix[BlockMatrix]
-    import dm.ops._
     
     // filter and compute
     val filteredVds =
@@ -129,24 +123,19 @@ class RestServiceScoreCovariance(vds: VariantDataset, covariates: Array[String],
         if (activeVariants.length > limit)
           throw new RestFailure(s"Number of active variants $activeVariants exceeds limit $limit")
 
-        val X = xOpt.get
-        X.rows.persist()
+        val X = xOpt.get.toHailBlockMatrix().cache()
         
         // consider block matrix route
-        val scoresOpt = yResOpt.map { yRes =>
-          val yResMat = new org.apache.spark.mllib.linalg.DenseMatrix(yRes.length, 1, yRes.toArray, true)
-          X.multiply(yResMat).toBlockMatrixDense().toLocalMatrix().toArray
-        }
-        
+        val scoresOpt = yResOpt.map { yRes => X.multiply(yRes.asDenseMatrix.t).toLocalMatrix().toArray }
+                
         val covarianceOpt =
           if (req.compute_cov.isEmpty || (req.compute_cov.isDefined && req.compute_cov.get)) {
-            val Xb = X.toBlockMatrixDense()
-            val covarianceSquare = (Xb * Xb.transpose).toLocalMatrix().toArray
+            val covarianceSquare = X.multiply(X.transpose()).toLocalMatrix().toArray
             Some(RestService.lowerTriangle(covarianceSquare, activeVariants.length))
           } else
             None
         
-        X.rows.unpersist()
+        X.blocks.unpersist()
 
         val activeSingleVariants = activeVariants.map(v =>
           SingleVariant(Some(v.contig), Some(v.start), Some(v.ref), Some(v.alt)))
