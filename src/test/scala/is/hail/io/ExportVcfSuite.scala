@@ -274,14 +274,34 @@ class ExportVCFSuite extends SparkSuite {
     val out = tmpDir.createLocalTempFile("foo", "vcf")
     vds.exportVCF(out)
     hadoopConf.readLines(out) { lines =>
-      lines.foreach { l =>
-        if (l.value.startsWith("20\t13029920")) {
-          assert(l.value.contains("GT:AD:DP:GQ:PL\t1/1:0,6:6:18:234,18,0\t1/1:0,4:4:12:159,12,0\t" +
+      lines.map(_.value).filter(_.startsWith("20\t13029920")).foreach { _.contains(
+        "GT:AD:DP:GQ:PL\t1/1:0,6:6:18:234,18,0\t1/1:0,4:4:12:159,12,0\t" +
             "1/1:0,4:4:12:163,12,0\t1/1:0,12:12:36:479,36,0\t1/1:0,4:4:12:149,12,0\t1/1:0,6:6:18:232,18,0\t" +
-            "1/1:0,6:6:18:242,18,0\t1/1:0,3:3:9:119,9,0\t1/1:0,9:9:27:374,27,0\t./.:1,0:1:.:.\t1/1:0,3:3:9:133,9,0"))
+            "1/1:0,6:6:18:242,18,0\t1/1:0,3:3:9:119,9,0\t1/1:0,9:9:27:374,27,0\t./.:1,0:1:.:.\t1/1:0,3:3:9:133,9,0")
+      }
+    }
+  }
+  
+  @Test def testReference() {
+    val vds = hc.importVCF("src/test/resources/sample.vcf", dropSamples = true)
+
+    var found = 0
+    val out = tmpDir.createLocalTempFile("foo", "vcf")
+    vds.exportVCF(out)
+    hadoopConf.readLines(out) { lines =>
+      lines.foreach { l =>
+        if (l.value.startsWith("##reference")) {
+          found += 1
+          l.value == "##reference=GRCh37"
+        }
+        else if (l.value.startsWith("##contig=<ID=10")) {
+          found += 1
+          l.value == "##contig=<ID=10,length=135534747>"
         }
       }
     }
+      
+    assert(found == 2)
   }
   
   def genFormatFieldVCF: Gen[Type] = Gen.oneOf[Type](

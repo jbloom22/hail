@@ -4,7 +4,7 @@ import is.hail
 import is.hail.annotations.MemoryBuffer
 import is.hail.expr._
 import is.hail.utils._
-import is.hail.variant.{Genotype, Variant, VariantSampleMatrix}
+import is.hail.variant.{GenomeReference, Genotype, Variant, VariantSampleMatrix}
 
 import scala.io.Source
 import scala.reflect.ClassTag
@@ -213,6 +213,8 @@ object ExportVCF {
     }
     val formatFieldString = formatFieldOrder.map(i => tg.fields(i).name).mkString(":")
 
+    val gr = vsm.vSignature.asInstanceOf[TVariant].gr.asInstanceOf[GenomeReference]    
+        
     val tva = vsm.vaSignature match {
       case t: TStruct => t.asInstanceOf[TStruct]
       case _ =>
@@ -239,8 +241,19 @@ object ExportVCF {
       val sb = new StringBuilder()
 
       sb.append("##fileformat=VCFv4.2\n")
-      sb.append(s"##hailversion=${hail.HAIL_PRETTY_VERSION}\n")
-
+      sb.append(s"##hailversion=${ hail.HAIL_PRETTY_VERSION }\n")
+      sb.append(s"##reference=${ gr.name }\n")
+      
+      gr.contigs.foreachBetween { c =>
+        sb.append("##contig=<ID=")
+        sb.append(c)
+        sb.append(",length=")
+        sb.append(gr.contigLength(c))
+        sb += '>'
+      }(sb += '\n')
+      
+      sb += '\n'
+      
       tg.fields.foreachBetween { f =>
         sb.append("##FORMAT=<ID=")
         sb.append(f.name)
