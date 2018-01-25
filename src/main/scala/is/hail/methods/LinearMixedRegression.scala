@@ -184,20 +184,9 @@ object LinearMixedRegression {
           vds1.rdd.mapPartitions({ it =>
             val sclr = scalarLMMBc.value
 
-            val r1 = 1 to c
-
-            val CtC = DenseMatrix.zeros[Double](c + 1, c + 1)
-            CtC(r1, r1) := sclr.con.CtC
-
-            val UtC = DenseMatrix.zeros[Double](nEigs, c + 1)
-            UtC(::, r1) := sclr.con.UtC
-
-            val Cty = DenseVector.zeros[Double](c + 1)
-            Cty(r1) := sclr.con.Cty
-
-            val CzC = DenseMatrix.zeros[Double](c + 1, c + 1)
-            CzC(r1, r1) := sclr.UtcovZUtcov
-
+            val CdC = sclr.CdC0.copy
+            val Cdy = sclr.Cdy0.copy
+            
             val missingSamples = new ArrayBuilder[Int]
             val x0 = DenseVector.zeros[Double](n)
 
@@ -209,7 +198,7 @@ object LinearMixedRegression {
                 } else
                   RegressionUtils.hardCalls(gs, n, sampleMaskBc.value) // No special treatment of constant
               
-              val annotation = sclr.likelihoodRatioTestLowRank(x, UtBc.value * x, CtC, UtC, Cty, CzC)
+              val annotation = sclr.likelihoodRatioTestLowRank(x, UtBc.value * x, CdC, Cdy)
 
               (v, (inserter(va, annotation), gs)) }
           }, preservesPartitioning = true)
@@ -445,19 +434,8 @@ object LinearMixedRegression {
           vds1.rdd.orderedLeftJoinDistinct(projG2).asOrderedRDD.mapPartitions({ it =>
             val sclr = scalarLMMBc.value
 
-            val r2 = 1 to c
-
-            val CtC = DenseMatrix.zeros[Double](c + 1, c + 1)
-            CtC(r2, r2) := sclr.con.CtC
-
-            val UtC = DenseMatrix.zeros[Double](nEigs, c + 1)
-            UtC(::, r2) := sclr.Utcov
-
-            val Cty = DenseVector.zeros[Double](c + 1)
-            Cty(r2) := sclr.con.Cty
-
-            val CzC = DenseMatrix.zeros[Double](c + 1, c + 1)
-            CzC(r2, r2) := sclr.UtcovZUtcov
+            val CdC = sclr.CdC0.copy
+            val Cdy = sclr.Cdy0.copy
 
             val missingSamples = new ArrayBuilder[Int]
             val x = DenseVector.zeros[Double](n)
@@ -468,7 +446,7 @@ object LinearMixedRegression {
               else
                 x := RegressionUtils.hardCalls(gs, n, sampleMaskBc.value) // No special treatment of constant
 
-              val annotation = sclr.likelihoodRatioTestLowRank(x, px, CtC, UtC, Cty, CzC)
+              val annotation = sclr.likelihoodRatioTestLowRank(x, px, CdC, Cdy)
 
               (v, (inserter(va, annotation), gs))
             }
@@ -692,8 +670,8 @@ class FullRankScalarLMM(
   logNullS2: Double,
   useML: Boolean) {
 
-  val n = y.length
-  val invDf = 1.0 / (if (useML) n else n - Qt.rows)
+  private val n = y.length
+  private val invDof = 1.0 / (if (useML) n else n - Qt.rows)
 
   def likelihoodRatioTestBlock(X: DenseMatrix[Double]): Array[Annotation] = {
     val n = y.length.toDouble
@@ -702,59 +680,56 @@ class FullRankScalarLMM(
     val XQty = X.t * y - QtX.t * Qty
 
     val b = XQty :/ XQtX
-    val s2 = invDf * (yQty - (XQty :* b))
+    val s2 = invDof * (yQty - (XQty :* b))
     val chi2 = n * (logNullS2 - breeze.numerics.log(s2))
-    val p = chi2.map(c => chiSquaredTail(1, c))
+    val p = chi2.map(chiSquaredTail(1, _))
     
     Array.tabulate(X.cols)(i => Annotation(b(i), s2(i), chi2(i), p(i)))
   }
 }
 
 // Handles low-rank case, but is slower than ScalarLMM on full-rank case
+// FIXME: fix redundancy between con and LowRankScalarLMM ... 
 case class LowRankScalarLMM(con: LMMConstants, delta: Double, logNullS2: Double, useML: Boolean) {
-  val n = con.n
-  val Uty = con.Uty
-  val Utcov = con.UtC
+  
+  private val invDof = 1d / (if (useML) con.n else con.n - con.c)
+  private val invDelta = 1 / delta
 
-  val invDf = 1d / (if (useML) n else n - con.c)
-  val invDelta = 1 / delta
+  private val r0 = 0 to 0
+  private val r1 = 1 to con.c
 
-  val Z = (con.S + delta).map(1 / _ - invDelta)
-  val ydy = con.yty / delta + (Uty dot (Uty :* Z))
-  val UtcovZUtcov = Utcov.t * (Utcov(::, *) :* Z)
+  private val Z = (con.S + delta).map(1 / _ - invDelta)
+  private val ZUty = Z :* con.Uty
 
-  val r0 = 0 to 0
-  val r1 = 1 to con.c
+  private val UtC = DenseMatrix.zeros[Double](con.UtC.rows, con.c + 1) // FIXME: especially here
+  UtC(::, r1) := con.UtC
+  
+  val CdC0: DenseMatrix[Double] = DenseMatrix.zeros[Double](con.c + 1, con.c + 1)
+  CdC0(r1, r1) := invDelta * con.CtC + (con.UtC.t * (con.UtC(::, *) :* Z))
+  
+  val Cdy0: DenseVector[Double] = DenseVector.zeros[Double](con.c + 1)
+  Cdy0(r1) := invDelta * con.Cty + (con.UtC.t * ZUty)
 
-  def likelihoodRatioTestLowRank(x: Vector[Double], Utx: DenseVector[Double], CtC: DenseMatrix[Double], UtC: DenseMatrix[Double], Cty: DenseVector[Double], CzC: DenseMatrix[Double]): Annotation = {
-
-    CtC(0, 0) = x dot x
-    CtC(r0, r1) := con.C.t * x
-    CtC(r1, r0) := CtC(r0, r1).t
-
-    UtC(::, 0) := Utx
-
-    Cty(0) = x dot con.y
-
-    val Cdy = invDelta * Cty + (UtC.t * (Uty :* Z))
-
-    val ZUtx = Utx :* Z
-
-    CzC(0, 0) = Utx dot ZUtx
-    CzC(r0, r1) := Utcov.t * ZUtx
-    CzC(r1, r0) := CzC(r0, r1).t
-
-    val CdC = invDelta * CtC + CzC
-
+  val ydy: Double = invDelta * con.yty + (con.Uty dot ZUty)
+  
+  def likelihoodRatioTestLowRank(x: Vector[Double], Utx: DenseVector[Double], CdC: DenseMatrix[Double], Cdy: DenseVector[Double]): Annotation = {
+    val ZUtx = Z :* Utx
+    
+    CdC(0, 0) = invDelta * (x dot x) + (Utx dot ZUtx)
+    CdC(r0, r1) := invDelta  * (con.C.t * x) + (con.UtC.t * ZUtx)
+    CdC(r1, r0) := CdC(0, r1).t
+    
+    Cdy(0) = invDelta * (x dot con.y) + (Utx dot ZUty)
+    
     try {
       val b = CdC \ Cdy
-      val s2 = invDf * (ydy - (Cdy dot b))
-      val chi2 = n * (logNullS2 - math.log(s2))
+      val s2 = invDof * (ydy - (Cdy dot b))
+      val chi2 = con.n * (logNullS2 - math.log(s2))
       val p = chiSquaredTail(1, chi2)
 
       Annotation(b(0), s2, chi2, p)
     } catch {
-      case e: breeze.linalg.MatrixSingularException => null
+      case e: breeze.linalg.MatrixSingularException => null.asInstanceOf[Annotation]
     }
   }
 }
