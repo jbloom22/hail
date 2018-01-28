@@ -689,7 +689,6 @@ class FullRankScalarLMM(
 }
 
 // Handles low-rank case, but is slower than ScalarLMM on full-rank case
-// FIXME: fix redundancy between con and LowRankScalarLMM ... 
 case class LowRankScalarLMM(con: LMMConstants, delta: Double, logNullS2: Double, useML: Boolean) {
   
   private val invDof = 1d / (if (useML) con.n else con.n - con.c)
@@ -700,9 +699,6 @@ case class LowRankScalarLMM(con: LMMConstants, delta: Double, logNullS2: Double,
 
   private val Z = (con.S + delta).map(1 / _ - invDelta)
   private val ZUty = Z :* con.Uty
-
-  private val UtC = DenseMatrix.zeros[Double](con.UtC.rows, con.c + 1) // FIXME: especially here
-  UtC(::, r1) := con.UtC
   
   val CdC0: DenseMatrix[Double] = DenseMatrix.zeros[Double](con.c + 1, con.c + 1)
   CdC0(r1, r1) := invDelta * con.CtC + (con.UtC.t * (con.UtC(::, *) :* Z))
