@@ -1,3 +1,3 @@
-from hail.linalg.matrix import BlockMatrix
+from hail.linalg.matrix import BlockMatrix, LocalMatrix
 
-__all__ = ['BlockMatrix']
+__all__ = ['BlockMatrix', 'LocalMatrix']

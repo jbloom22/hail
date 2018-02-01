@@ -3,8 +3,6 @@ from hail.utils.java import Env, handle_py4j, scala_object, jarray, numpy_from_b
 from hail.typecheck import *
 from hail.api2 import MatrixTable
 from hail.expr.expression import expr_numeric, to_expr, analyze
-from struct import unpack
-import numpy as np
 
 block_matrix_type = lazy()
 
@@ -38,7 +36,7 @@ class BlockMatrix(object):
                 "expression of '{}'".format(source.__class__) if source is not None else 'scalar expression'))
         mt = source
         base, _ = mt._process_joins(entry_expr)
-        analyze('block_matrix_from_expr', entry_expr, mt._entry_indices)
+        analyze('from_matrix_table', entry_expr, mt._entry_indices)
 
         mt._jvds.writeBlockMatrix(path, to_expr(entry_expr)._ast.to_hql(), block_size)
         return cls.read(path)
@@ -111,6 +109,10 @@ class BlockMatrix(object):
         return BlockMatrix(self._jbm.unpersist())
 
     @handle_py4j
+    def to_local_matrix(self):
+        return LocalMatrix(self._jbm.toLocalMatrix())
+
+    @handle_py4j
     def to_numpy_matrix(self):
         return numpy_from_breeze(self._jbm.toLocalMatrix())
 
@@ -125,3 +127,53 @@ class BlockMatrix(object):
         return self * (1./i)
 
 block_matrix_type.set(BlockMatrix)
+
+
+local_matrix_type = lazy()
+
+class LocalMatrix(object):
+
+    @classmethod
+    @handle_py4j
+    def read(cls, path):
+        hc = Env.hc()
+        return cls(Env.hail().utils.richUtils.RichDenseMatrixDouble.read(
+            hc._jhc, path))
+            
+    def __init__(self, jlm):
+        self._jlm = jlm
+
+    @staticmethod
+    @handle_py4j
+    def random(num_rows, num_cols):
+        return LocalMatrix(Env.hail().utils.richUtils.RichDenseMatrixDouble.random(num_rows, num_cols))
+
+    def to_block_matrix(self, block_size):
+        hc = Env.hc()
+        return BlockMatrix(scala_object(Env.hail().distributedmatrix, 'BlockMatrix').fromLocal(hc._jsc, self._jlm, block_size))
+
+    def local_blocks_to_block_matrix(self, block_size):
+        hc = Env.hc()
+        return BlockMatrix(scala_object(Env.hail().distributedmatrix, 'BlockMatrix').fromLocalBlocks(hc._jsc, self._jlm, block_size))
+
+    @property
+    @handle_py4j
+    def num_rows(self):
+        return self._jlm.rows()
+
+    @property
+    @handle_py4j
+    def num_cols(self):
+        return self._jlm.cols()
+
+    @handle_py4j
+    @typecheck_method(path=strlike)
+    def write(self, path):
+        hc = Env.hc()
+        scala_object(Env.hail().utils.richUtils, 'RichDenseMatrixDouble').write(hc._jhc, self._jlm, path)
+
+    @handle_py4j
+    def to_numpy_matrix(self):
+        return numpy_from_breeze(self._jlm)
+
+local_matrix_type.set(LocalMatrix)

@@ -3,8 +3,10 @@ package is.hail.utils.richUtils
 import java.io.{DataInputStream, DataOutputStream}
 
 import breeze.linalg.DenseMatrix
+import is.hail.HailContext
 import is.hail.annotations.Memory
-import is.hail.utils.ArrayBuilder
+import is.hail.distributedmatrix.BlockMatrix
+import is.hail.utils._
 
 object RichDenseMatrixDouble {  
   // copies n doubles as bytes from data to dos
@@ -45,6 +47,14 @@ object RichDenseMatrixDouble {
     }
   }
   
+  def write(hc: HailContext, m: DenseMatrix[Double], path: String) {
+    hc.hadoopConf.writeDataFile(path)(m.write)
+  }  
+  
+  def read(hc: HailContext, path: String): DenseMatrix[Double] = {
+    hc.hadoopConf.readDataFile(path)(read)
+  }
+  
   // assumes zero offset and minimal majorStride 
   def read(dis: DataInputStream): DenseMatrix[Double] = {
     val rows = dis.readInt()
@@ -56,6 +66,10 @@ object RichDenseMatrixDouble {
     
     new DenseMatrix[Double](rows, cols, data,
       offset = 0, majorStride = if (isTranspose) cols else rows, isTranspose = isTranspose)
+  }
+  
+  def random(nRows: Int, nCols: Int): DenseMatrix[Double] = {
+    DenseMatrix.rand(nRows, nCols)
   }
 }
 

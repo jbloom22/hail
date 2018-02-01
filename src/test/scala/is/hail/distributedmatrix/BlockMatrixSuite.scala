@@ -364,6 +364,19 @@ class BlockMatrixSuite extends SparkSuite {
   }
 
   @Test
+  def fromLocalBlocksTest() {
+    forAll(denseMatrix[Double]()) { lm =>
+      assert(lm === BlockMatrix.fromLocalBlocks(sc, lm, lm.rows + 1).toLocalMatrix())
+      assert(lm === BlockMatrix.fromLocalBlocks(sc, lm, lm.rows).toLocalMatrix())
+      if (lm.rows > 1) {
+        assert(lm === BlockMatrix.fromLocalBlocks(sc, lm, lm.rows - 1).toLocalMatrix())
+        assert(lm === BlockMatrix.fromLocalBlocks(sc, lm, math.sqrt(lm.rows).toInt).toLocalMatrix())
+      }
+      true
+    }.check()
+  }
+  
+  @Test
   def readWriteIdentityTrivial() {
     val m = toBM(4, 4, Array[Double](
       1,  2,  3,  4,

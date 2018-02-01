@@ -20,7 +20,7 @@ import org.json4s._
 
 object BlockMatrix {
   type M = BlockMatrix
-  val defaultBlockSize: Int = 1024
+  val defaultBlockSize: Int = 4096
 
   def from(sc: SparkContext, lm: BDM[Double]): M =
     from(sc, lm, defaultBlockSize)
@@ -49,6 +49,41 @@ object BlockMatrix {
     blockSize, lm.rows, lm.cols)
   }
 
+  def fromLocal(sc: SparkContext, lm: BDM[Double]): M =
+    from(sc, lm, defaultBlockSize)
+
+  def fromLocal(sc: SparkContext, lm: BDM[Double], blockSize: Int): M =
+    from(sc, lm, blockSize)
+
+  def fromLocalBlocks(sc: SparkContext, lm: BDM[Double]): M =
+    from(sc, lm, defaultBlockSize)  
+
+  def fromLocalBlocks(sc: SparkContext, lm: BDM[Double], blockSize: Int): M = {
+    assertCompatibleLocalMatrix(lm)
+    val gp = GridPartitioner(blockSize, lm.rows, lm.cols)
+    val localBlocksBc = Array.tabulate(gp.numPartitions) { pi =>
+      val (i, j) = gp.blockCoordinates(pi)
+      val (blockNRows, blockNCols) = gp.blockDims(pi)
+      val iOffset = i * blockSize
+      val jOffset = j * blockSize
+      
+      sc.broadcast(lm(iOffset until iOffset + blockNRows, jOffset until jOffset + blockNCols).copy)
+    }
+    
+    val blocks = new RDD[((Int, Int), BDM[Double])](sc, Nil) {
+      override val partitioner = Some(gp)
+
+      def getPartitions: Array[Partition] = Array.tabulate(gp.numPartitions)(i => IntPartition(i))
+
+      def compute(split: Partition, context: TaskContext): Iterator[((Int, Int), BDM[Double])] = {
+        val pi = split.index
+        Iterator((gp.blockCoordinates(pi), localBlocksBc(split.index).value))
+      }
+    }
+    
+    new BlockMatrix(blocks, blockSize, lm.rows, lm.cols)
+  }
+  
   def from(irm: IndexedRowMatrix): M =
     from(irm, defaultBlockSize)
 
