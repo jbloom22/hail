@@ -326,7 +326,11 @@ class BlockMatrix(val blocks: RDD[((Int, Int), BDM[Double])],
     
     hadoop.writeTextFile(uri + "/_SUCCESS")(out => ())
   }
-
+  
+  def writeBand(uri: String, lowerBandwidth: Long, upperBandwidth: Long, forceRowMajor: Boolean) {
+    val keep = partitioner.bandedBlocks(lowerBandwidth, upperBandwidth)
+    write(uri, forceRowMajor, Some(keep))
+  }
 
   def cache(): this.type = {
     blocks.cache()
