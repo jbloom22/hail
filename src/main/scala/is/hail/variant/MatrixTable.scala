@@ -2912,16 +2912,15 @@ class MatrixTable(val hc: HailContext, val ast: MatrixIR) extends JoinAnnotator 
     val hadoop = sparkContext.hadoopConfiguration
     hadoop.mkDir(dirname)
 
+    val gp = GridPartitioner(blockSize, nRows, localNCols)
+    
     // write metadata
     hadoop.writeDataFile(dirname + BlockMatrix.metadataRelativePath) { os =>
-      jackson.Serialization.write(
-        BlockMatrixMetadata(blockSize, nRows, localNCols),
-        os)
+      jackson.Serialization.write(gp, os)
     }
 
     // write blocks
     hadoop.mkDir(dirname + "/parts")
-    val gp = GridPartitioner(blockSize, nRows, localNCols)
     val blockCount =
       new WriteBlocksRDD(dirname, rvd, sparkContext, matrixType,
         sparkContext.broadcast(colValues), partStarts, f, ec, gp)

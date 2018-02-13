@@ -5,7 +5,7 @@ import java.io.{DataInputStream, DataOutputStream}
 import breeze.linalg.DenseMatrix
 import is.hail.HailContext
 import is.hail.annotations.Memory
-import is.hail.distributedmatrix.{BlockMatrix, BlockMatrixMetadata, GridPartitioner}
+import is.hail.distributedmatrix.{BlockMatrix, GridPartitioner}
 import is.hail.utils._
 import org.apache.commons.lang3.StringUtils
 import org.json4s.jackson
@@ -154,13 +154,12 @@ class RichDenseMatrixDouble(val m: DenseMatrix[Double]) extends AnyVal {
     val hadoop = hc.hadoopConf
     hadoop.mkDir(path)
 
+    val gp = GridPartitioner(blockSize, m.rows, m.cols)    
+    
     hadoop.writeDataFile(path + BlockMatrix.metadataRelativePath) { os =>
-      jackson.Serialization.write(
-        BlockMatrixMetadata(blockSize, m.rows, m.cols),
-        os)
+      jackson.Serialization.write(gp, os)
     }
 
-    val gp = GridPartitioner(blockSize, m.rows, m.cols)    
     val nParts = gp.numPartitions
     val d = digitsNeeded(nParts)
 

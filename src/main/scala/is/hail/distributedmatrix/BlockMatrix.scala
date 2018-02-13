@@ -109,12 +109,7 @@ object BlockMatrix {
     if (!hadoop.exists(uri + "/_SUCCESS"))
       fatal("Write failed: no success indicator found")
 
-    val BlockMatrixMetadata(blockSize, nRows, nCols) =
-      hadoop.readTextFile(uri + metadataRelativePath) { isr =>
-        jackson.Serialization.read[BlockMatrixMetadata](isr)
-      }
-
-    val gp = GridPartitioner(blockSize, nRows, nCols)
+    val gp = GridPartitioner.read(hc, uri + metadataRelativePath)
 
     def readBlock(i: Int, is: InputStream): Iterator[((Int, Int), BDM[Double])] = {
       val dis = new DataInputStream(is)
@@ -126,7 +121,7 @@ object BlockMatrix {
 
     val blocks = hc.readPartitions(uri, gp.numPartitions, readBlock, Some(gp))
 
-    new BlockMatrix(blocks, blockSize, nRows, nCols)
+    new BlockMatrix(blocks, gp.blockSize, gp.nRows, gp.nCols)
   }
 
   private[distributedmatrix] def assertCompatibleLocalMatrix(lm: BDM[Double]) {
@@ -212,13 +207,8 @@ object BlockMatrix {
         r.blockMap(ll / _)
       }
     }
-
   }
-
 }
-
-// must be top-level for Jackson to serialize correctly
-case class BlockMatrixMetadata(blockSize: Int, nRows: Long, nCols: Long)
 
 class BlockMatrix(val blocks: RDD[((Int, Int), BDM[Double])],
   val blockSize: Int,
@@ -319,7 +309,7 @@ class BlockMatrix(val blocks: RDD[((Int, Int), BDM[Double])],
 
     hadoop.writeDataFile(uri + metadataRelativePath) { os =>
       jackson.Serialization.write(
-        BlockMatrixMetadata(blockSize, nRows, nCols),
+        GridPartitioner(blockSize, nRows, nCols),
         os)
     }
 

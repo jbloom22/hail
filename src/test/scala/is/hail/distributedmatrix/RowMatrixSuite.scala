@@ -2,7 +2,7 @@ package is.hail.distributedmatrix
   
 import breeze.linalg.DenseMatrix
 import is.hail.SparkSuite
-import is.hail.check.{Gen, Prop}
+import is.hail.check.Gen
 import is.hail.utils._
 import org.testng.annotations.Test
 

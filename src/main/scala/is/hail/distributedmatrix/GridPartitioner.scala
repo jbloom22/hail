@@ -1,7 +1,17 @@
 package is.hail.distributedmatrix
 
-import is.hail.utils.ArrayBuilder
+import is.hail.HailContext
+import is.hail.utils._
 import org.apache.spark.Partitioner
+import org.json4s.jackson
+
+object GridPartitioner {
+  def read(hc: HailContext, uri: String): GridPartitioner = {
+    hc.hadoopConf.readTextFile(uri) { isr =>
+      jackson.Serialization.read[GridPartitioner](isr)
+    }
+  }
+}
 
 case class GridPartitioner(blockSize: Int, nRows: Long, nCols: Long) extends Partitioner {
   require(nRows > 0)
