@@ -1198,8 +1198,7 @@ class ExportRectangularRDD(hc: HailContext,
     val lastBlockCol = gp.blockIndex(lastCol)
     val lastColOffset = gp.blockOffset(lastCol)
     
-    val nCols = (lastCol - firstCol + 1).toInt
-    val nBlockCols = firstBlockCol - lastBlockCol + 1
+    val nBlockCols = lastBlockCol - firstBlockCol + 1
 
     // FIXME: limit read buffer size to gs
     val disPerBlockCol = new Array[DataInputStream](nBlockCols)
@@ -1210,24 +1209,27 @@ class ExportRectangularRDD(hc: HailContext,
 
     var i = firstRow
     while (i <= lastRow) {
-      if (i == firstRow || i % blockSize == 0) {
-        val blockRow = (i / blockSize).toInt
+      if (i == firstRow || gp.blockOffset(i) == 0) {
+        val blockRow = gp.blockIndex(i)
         val nRowsInBlock = gp.blockRowNRows(blockRow)
 
-        var blockCol = 0
-        while (blockCol < nBlockCols) {
+        var blockCol = firstBlockCol
+        while (blockCol <= lastBlockCol) {
           val is = gp.coordinatesBlock(blockRow, blockCol).toString
           assert(is.length <= d)
           val pis = StringUtils.leftPad(is, d, "0")
           val filename = inputPath + "/parts/part-" + pis
-
+          println(filename)
+          
           val dis = new DataInputStream(sHadoopBc.value.value.unsafeReader(filename))
 
           val nColsInBlock = gp.blockColNCols(blockCol)
 
           assert(dis.readInt() == nRowsInBlock)
           assert(dis.readInt() == nColsInBlock)
-          if (!dis.readBoolean())
+          val isTranspose = dis.readBoolean()
+          
+          if (!isTranspose)
             fatal("BlockMatrix must be stored row major on disk in order to be read as a RowMatrix")
 
           if (i == firstRow) {
@@ -1235,26 +1237,35 @@ class ExportRectangularRDD(hc: HailContext,
             assert(skip == dis.skipBytes(skip))
           }
 
-          disPerBlockCol(blockCol) = dis
+          disPerBlockCol(blockCol - firstBlockCol) = dis
+          
           blockCol += 1
         }
+        disPerBlockCol(0).skipBytes(firstColOffset << 3)
       }
-      
-      disPerBlockCol(0).skipBytes(firstColOffset << 3)
 
-      sb.clear()
-      var blockCol = 0
-      while (blockCol < nBlockCols) {
-        val moreBlockCols = blockCol < nBlockCols - 1
-        val n =
-          if (moreBlockCols)
-            gp.blockColNCols(blockCol)
+      var blockCol = firstBlockCol
+      while (blockCol <= lastBlockCol) {        
+        val firstColOffsetInBlock = 
+          if (blockCol > firstBlockCol)
+            0
           else
-            lastColOffset + 1
+            firstColOffset
+        
+        val lastColOffsetInBlock =
+          if (blockCol < lastBlockCol)
+            blockSize - 1
+          else
+            lastColOffset
 
-        disPerBlockCol(blockCol).readFully(byteBuf, 0, n << 3)
+        val n = lastColOffsetInBlock - firstColOffsetInBlock + 1
+        
+        println(byteBuf.length, n, n << 3)
+        
+        disPerBlockCol(blockCol - firstBlockCol).readFully(byteBuf, 0, n << 3)
         Memory.memcpy(doubleBuf, 0, byteBuf, 0, n)
         
+        sb.clear()        
         var k = 0
         while (k < n - 1) {
           sb.append(doubleBuf(k)) // FIXME: consider toFloat here or another way of truncating output
@@ -1262,11 +1273,12 @@ class ExportRectangularRDD(hc: HailContext,
           k += 1
         }
         sb.append(doubleBuf(n - 1))
-        if (blockCol < nBlockCols - 1)
+        if (blockCol < lastBlockCol)
           sb.append("\t")
         else
           sb.append("\n")
         
+        println(sb.result())
         osw.write(sb.result())
         
         blockCol += 1
