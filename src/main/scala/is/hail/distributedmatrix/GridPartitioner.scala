@@ -18,6 +18,7 @@ case class GridPartitioner(blockSize: Int, nRows: Long, nCols: Long) extends Par
   require(nCols > 0)
   
   def blockIndex(index: Long): Int = (index / blockSize).toInt
+  def blockOffset(index: Long): Int = (index % blockSize).toInt  
 
   require((nRows - 1) / blockSize + 1 <= Int.MaxValue)
   val nBlockRows: Int = blockIndex(nRows - 1) + 1

@@ -9,7 +9,6 @@ import is.hail.utils._
 import org.apache.commons.lang3.StringUtils
 import org.apache.spark.{Partition, Partitioner, SparkContext, TaskContext}
 import org.apache.spark.rdd.RDD
-import org.json4s.jackson
 
 object RowMatrix {
   def apply(hc: HailContext, rows: RDD[(Long, Array[Double])], nCols: Int): RowMatrix =
@@ -175,7 +174,7 @@ class ReadBlocksAsRowsRDD(path: String,
   def compute(split: Partition, context: TaskContext): Iterator[(Long, Array[Double])] = {
     val ReadBlocksAsRowsRDDPartition(_, start, end) = split.asInstanceOf[ReadBlocksAsRowsRDDPartition]
 
-    var disPerBlockCol = new Array[DataInputStream](nBlockCols)
+    val disPerBlockCol = new Array[DataInputStream](nBlockCols)
     val buf = new Array[Byte](blockSize << 3)
 
     var i = start
@@ -188,7 +187,8 @@ class ReadBlocksAsRowsRDD(path: String,
           val blockRow = (i / blockSize).toInt
           val nRowsInBlock = gp.blockRowNRows(blockRow)
           
-          disPerBlockCol = Array.tabulate(gp.nBlockCols) { blockCol =>
+          var blockCol = 0
+          while (blockCol < nBlockCols) {
             val is = gp.coordinatesBlock(blockRow, blockCol).toString
             assert(is.length <= d)
             val pis = StringUtils.leftPad(is, d, "0")
@@ -208,7 +208,8 @@ class ReadBlocksAsRowsRDD(path: String,
               assert(skip == dis.skipBytes(skip))
             }
 
-            dis
+            disPerBlockCol(blockCol) = dis
+            blockCol += 1
           }
         }
 
@@ -237,92 +238,3 @@ class ReadBlocksAsRowsRDD(path: String,
   
   @transient override val partitioner: Option[Partitioner] = Some(RowPartitioner(partitionStarts))
 }
-
-//// [`start`, `end`) is the row range of partition
-//case class ExportBlocksRDDPartition(index: Int, rectangle: Array[Long]) extends Partition {
-//  require(rectangle.length == 4)
-//}
-//
-//class ExportBlocksRDD(path: String,
-//  sc: SparkContext,
-//  rectangles: Array[Array[Long]],
-//  gp: GridPartitioner) extends RDD[(Long, Array[Double])](sc, Nil) {
-//
-//  // FIXME: pre-check that all rectangles are valid and necessary blocks exist
-//
-//  private val nCols = gp.nCols.toInt
-//  private val nBlockCols = gp.nBlockCols
-//  private val blockSize = gp.blockSize
-//
-//  private val d = digitsNeeded(gp.numPartitions)
-//  private val sHadoopBc = sc.broadcast(new SerializableHadoopConfiguration(sc.hadoopConfiguration))
-//
-//  protected def getPartitions: Array[Partition] = Array.tabulate(rectangles.length) { pi =>
-//    ExportBlocksRDDPartition(pi, rectangles(pi))
-//  }
-//
-//  def compute(split: Partition, context: TaskContext): Iterator[Int] = {
-//    val ExportBlocksRDDPartition(_, r) = split.asInstanceOf[ExportBlocksRDDPartition]
-//
-//    var disPerBlockCol = new Array[DataInputStream](nBlockCols)
-//    val buf = new Array[Byte](blockSize << 3)
-//
-//    var i = start
-//
-//    new Iterator[(Long, Array[Double])] {
-//      def hasNext: Boolean = i < end
-//
-//      def next(): (Long, Array[Double]) = {
-//        if (i == start || i % blockSize == 0) {
-//          val blockRow = (i / blockSize).toInt
-//          val nRowsInBlock = gp.blockRowNRows(blockRow)
-//          
-//          disPerBlockCol = Array.tabulate(gp.nBlockCols) { blockCol =>
-//            val is = gp.coordinatesBlock(blockRow, blockCol).toString
-//            assert(is.length <= d)
-//            val pis = StringUtils.leftPad(is, d, "0")
-//            val filename = path + "/parts/part-" + pis
-//
-//            val dis = new DataInputStream(sHadoopBc.value.value.unsafeReader(filename))
-//
-//            val nColsInBlock = gp.blockColNCols(blockCol)
-//
-//            assert(dis.readInt() == nRowsInBlock)
-//            assert(dis.readInt() == nColsInBlock)
-//            if (!dis.readBoolean())
-//              fatal("BlockMatrix must be stored row major on disk in order to be read as a RowMatrix")
-//
-//            if (i == start) {
-//              val skip = (start % blockSize).toInt * (nColsInBlock << 3)
-//              assert(skip == dis.skipBytes(skip))
-//            }
-//
-//            dis
-//          }
-//        }
-//
-//        val row = new Array[Double](nCols)
-//        var offset = 0
-//        var blockCol = 0
-//        while (blockCol < nBlockCols) {
-//          val n = gp.blockColNCols(blockCol)
-//          
-//          disPerBlockCol(blockCol).readFully(buf, 0, n << 3)
-//          Memory.memcpy(row, offset, buf, 0, n)
-//          
-//          offset += n
-//          blockCol += 1
-//        }
-//        val iRow = (i, row)
-//        i += 1
-//        
-//        if (i % blockSize == 0 || i == end)
-//          disPerBlockCol.foreach(_.close())
-//        
-//        iRow
-//      }
-//    }
-//  }
-//  
-//  @transient override val partitioner: Option[Partitioner] = Some(RowPartitioner(partitionStarts))
-//}
