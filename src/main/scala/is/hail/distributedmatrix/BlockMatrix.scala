@@ -1,6 +1,7 @@
 package is.hail.distributedmatrix
 
 import java.io._
+import java.text.DecimalFormat
 
 import breeze.linalg.{DenseMatrix => BDM, _}
 import breeze.stats.distributions.{RandBasis, ThreadLocalRandomGenerator}
@@ -121,8 +122,14 @@ object BlockMatrix {
     new BlockMatrix(blocks, gp.blockSize, gp.nRows, gp.nCols)
   }
 
-  def exportRectangular(hc: HailContext, inputPath: String, outputPath: String, rectangles: Array[Array[Long]]) {
-    val nRects = new ExportRectangularRDD(hc, inputPath, outputPath, rectangles).collect().sum
+  def exportRectangles(hc: HailContext, inputPath: String, outputPath: String, flattenedRectangles: Array[Long]) {
+    require(flattenedRectangles.length % 4 == 0)
+    val rectangles = flattenedRectangles.grouped(4).toArray
+    exportRectangles(hc, inputPath, outputPath, rectangles: Array[Array[Long]])
+  }
+  
+  def exportRectangles(hc: HailContext, inputPath: String, outputPath: String, rectangles: Array[Array[Long]]) {
+    val nRects = new ExportRectanglesRDD(hc, inputPath, outputPath, rectangles).collect().sum
     assert(nRects == rectangles.length)
     
     info(s"wrote $nRects files")
@@ -330,6 +337,17 @@ class BlockMatrix(val blocks: RDD[((Int, Int), BDM[Double])],
   
   def writeBand(uri: String, lowerBandwidth: Long, upperBandwidth: Long, forceRowMajor: Boolean) {
     val keep = partitioner.bandedBlocks(lowerBandwidth, upperBandwidth)
+    write(uri, Some(keep), forceRowMajor)
+  }
+
+  def writeRectangles(uri: String, flattenedRectangles: Array[Long], forceRowMajor: Boolean) {
+    require(flattenedRectangles.length % 4 == 0)
+    val rectangles = flattenedRectangles.grouped(4).toArray
+    writeRectangles(uri, rectangles, forceRowMajor)
+  }
+  
+  def writeRectangles(uri: String, rectangles: Array[Array[Long]], forceRowMajor: Boolean) {
+    val keep = partitioner.rectangularBlocks(rectangles)
     write(uri, Some(keep), forceRowMajor)
   }
 
@@ -1162,11 +1180,11 @@ class WriteBlocksRDD(path: String,
   }
 }
 
-case class ExportRectangularRDDPartition(index: Int, rectangle: Array[Long]) extends Partition {
+case class ExportRectanglesRDDPartition(index: Int, rectangle: Array[Long]) extends Partition {
   require(rectangle.length == 4)
 }
 
-class ExportRectangularRDD(hc: HailContext,
+class ExportRectanglesRDD(hc: HailContext,
   inputPath: String,
   outputPath: String,
   rectangles: Array[Array[Long]]) extends RDD[Int](hc.sc, Nil) {
@@ -1179,14 +1197,17 @@ class ExportRectangularRDD(hc: HailContext,
   private val d = digitsNeeded(gp.numPartitions)
   private val sHadoopBc = hc.sc.broadcast(new SerializableHadoopConfiguration(hc.sc.hadoopConfiguration))
   
+  private val decimalFormat = new DecimalFormat(".####")
+  
   protected def getPartitions: Array[Partition] = Array.tabulate(rectangles.length) { pi =>
-    ExportRectangularRDDPartition(pi, rectangles(pi))
+    ExportRectanglesRDDPartition(pi, rectangles(pi))
   }
 
   def compute(split: Partition, context: TaskContext): Iterator[Int] = {
-    val ExportRectangularRDDPartition(_, r) = split.asInstanceOf[ExportRectangularRDDPartition]
+    val ExportRectanglesRDDPartition(_, r) = split.asInstanceOf[ExportRectanglesRDDPartition]
 
     val firstRow = r(0)
+    val firstRowOffset = gp.blockOffset(firstRow)
     
     val lastRow = r(1)    
 
@@ -1197,6 +1218,9 @@ class ExportRectangularRDD(hc: HailContext,
     val lastCol = r(3)    
     val lastBlockCol = gp.blockIndex(lastCol)
     val lastColOffset = gp.blockOffset(lastCol)
+    
+    val firstColByteOffset = firstColOffset << 3    
+    val lastColByteDeficit = ((gp.blockColNCols(lastBlockCol) - 1) - lastColOffset) << 3
     
     val nBlockCols = lastBlockCol - firstBlockCol + 1
 
@@ -1219,7 +1243,6 @@ class ExportRectangularRDD(hc: HailContext,
           assert(is.length <= d)
           val pis = StringUtils.leftPad(is, d, "0")
           val filename = inputPath + "/parts/part-" + pis
-          println(filename)
           
           val dis = new DataInputStream(sHadoopBc.value.value.unsafeReader(filename))
 
@@ -1228,12 +1251,11 @@ class ExportRectangularRDD(hc: HailContext,
           assert(dis.readInt() == nRowsInBlock)
           assert(dis.readInt() == nColsInBlock)
           val isTranspose = dis.readBoolean()
-          
           if (!isTranspose)
             fatal("BlockMatrix must be stored row major on disk in order to be read as a RowMatrix")
 
           if (i == firstRow) {
-            val skip = (firstRow % blockSize).toInt * (nColsInBlock << 3)
+            val skip = firstRowOffset * (nColsInBlock << 3)
             assert(skip == dis.skipBytes(skip))
           }
 
@@ -1241,8 +1263,9 @@ class ExportRectangularRDD(hc: HailContext,
           
           blockCol += 1
         }
-        disPerBlockCol(0).skipBytes(firstColOffset << 3)
       }
+      
+      disPerBlockCol.head.skipBytes(firstColByteOffset)
 
       var blockCol = firstBlockCol
       while (blockCol <= lastBlockCol) {        
@@ -1259,8 +1282,7 @@ class ExportRectangularRDD(hc: HailContext,
             lastColOffset
 
         val n = lastColOffsetInBlock - firstColOffsetInBlock + 1
-        
-        println(byteBuf.length, n, n << 3)
+        println(n)
         
         disPerBlockCol(blockCol - firstBlockCol).readFully(byteBuf, 0, n << 3)
         Memory.memcpy(doubleBuf, 0, byteBuf, 0, n)
@@ -1268,23 +1290,24 @@ class ExportRectangularRDD(hc: HailContext,
         sb.clear()        
         var k = 0
         while (k < n - 1) {
-          sb.append(doubleBuf(k)) // FIXME: consider toFloat here or another way of truncating output
+          sb.append(decimalFormat.format(doubleBuf(k)))
           sb.append("\t")
           k += 1
         }
-        sb.append(doubleBuf(n - 1))
+        sb.append(decimalFormat.format(doubleBuf(n - 1)))
         if (blockCol < lastBlockCol)
           sb.append("\t")
         else
           sb.append("\n")
         
-        println(sb.result())
         osw.write(sb.result())
         
         blockCol += 1
       }
       i += 1
 
+      disPerBlockCol.last.skipBytes(lastColByteDeficit)      
+      
       if (i % blockSize == 0 || i == lastRow + 1)
         disPerBlockCol.foreach(_.close())
     }

@@ -5,6 +5,7 @@ from hail.matrixtable import MatrixTable
 from hail.table import Table
 from hail.expr.expression import expr_numeric, to_expr, analyze
 import numpy as np
+import itertools
 
 block_matrix_type = lazy()
 
@@ -58,6 +59,17 @@ class BlockMatrix(object):
             block_matrix_constructor(sc,
                                      breeze_matrix_constructor(num_rows, num_cols, data, is_transpose),
                                      block_size))
+
+    @staticmethod
+    @handle_py4j
+    # @typecheck_method(input_path=strlike,
+    #                   output_path=strlike,
+    #                   rectangles=listof(listof(integral)))
+    def export_rectangles(input_path, output_path, rectangles):
+        hc = Env.hc()
+        flattened_rectangles = list(itertools.chain.from_iterable(rectangles))
+        Env.hail().distributedmatrix.BlockMatrix.exportRectangles(
+            hc._jhc, input_path, output_path, jarray(Env.jvm().long, flattened_rectangles))
 
     @classmethod
     @handle_py4j
@@ -121,6 +133,14 @@ class BlockMatrix(object):
                       force_row_major=bool)
     def write_band(self, path, lower_bandwidth=0, upper_bandwidth=0, force_row_major=False):
         self._jbm.writeBand(path, long(lower_bandwidth), long(upper_bandwidth), force_row_major)
+
+    @handle_py4j
+    @typecheck_method(path=strlike,
+                      rectangles=listof(listof(integral)),
+                      force_row_major=bool)
+    def write_rectangles(self, path, rectangles, force_row_major=False):
+        flattened_rectangles = list(itertools.chain.from_iterable(rectangles))
+        self._jbm.writeRectangles(path, jarray(Env.jvm().long, flattened_rectangles), force_row_major)
 
     @handle_py4j
     @typecheck_method(cols_to_keep=listof(integral))

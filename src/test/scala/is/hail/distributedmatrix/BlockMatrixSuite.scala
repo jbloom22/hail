@@ -793,10 +793,10 @@ class BlockMatrixSuite extends SparkSuite {
   def testExportRectangular() {
     val inputPath = "/tmp/bm"
     val outputPath = "/tmp/rectangles"
-    val rectangles = Array(Array[Long](0, 0, 0, 0), Array[Long](3, 5, 3, 5), Array[Long](4, 8, 4, 8), Array[Long](0, 8, 0, 9))
+    val rectangles = Array(Array[Long](0, 7, 0, 7), Array[Long](3, 5, 3, 5), Array[Long](4, 8, 4, 8), Array[Long](0, 8, 0, 9))
 //    val rectangles = Array(Array[Long](0, 8, 0, 9))
 
-    val blockSize = 3
+    val blockSize = 10
     val lm = new BDM[Double](9, 10, (0 until 90).map(_.toDouble).toArray)
     val bm = BlockMatrix.from(sc, lm, blockSize)
 
@@ -804,6 +804,6 @@ class BlockMatrixSuite extends SparkSuite {
     
     bm.write(inputPath, forceRowMajor = true)
     
-    BlockMatrix.exportRectangular(hc, inputPath, outputPath, rectangles)
+    BlockMatrix.exportRectangles(hc, inputPath, outputPath, rectangles)
   }
 }
