@@ -181,6 +181,9 @@ class MatrixTable(object):
         table2 = dataset.cols_table()
         table2 = table2.annotate(pop='AMR', is_case=False, sex='F')
 
+    Use :func:`.read_matrix_table` to read a matrix table that was written with
+    :meth:`.MatrixTable.write`.
+
     Add annotations:
 
     >>> dataset = dataset.annotate_globals(pli={'SCN1A': 0.999, 'SONIC': 0.014},
