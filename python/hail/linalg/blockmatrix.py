@@ -1,4 +1,4 @@
-from hail.utils import new_temp_file, storage_level
+from hail.utils import new_temp_file, new_local_temp_file, get_URI, storage_level
 from hail.utils.java import Env, jarray, joption, FatalError
 from hail.typecheck import *
 from hail.matrixtable import MatrixTable
@@ -64,23 +64,23 @@ class BlockMatrix(object):
 
         >>> import numpy as np
         >>> a = np.random.rand(10, 20)
-        >>> a.tofile('output/binary')
-
+        >>> a.tofile('/tmp/binary')
+ 
         To create a block matrix of the same dimensions:
 
         >>> from hail.linalg import BlockMatrix
-        >>> bm = BlockMatrix.fromfile('output/binary', 10, 20)
+        >>> bm = BlockMatrix.fromfile('file:///tmp/binary', 10, 20)
 
         Notes
         -----
         This method, analogous to `numpy.fromfile
         <https://docs.scipy.org/doc/numpy/reference/generated/numpy.ndarray.fromfile.html>`__,
-        reads a binary file of float64 values in row-major order, as produced by
-        `numpy.fromfile
-        <https://docs.scipy.org/doc/numpy/reference/generated/numpy.ndarray.fromfile.html>`__.
+        reads a binary file of float64 values in row-major order, such as that
+        produced by `numpy.tofile
+        <https://docs.scipy.org/doc/numpy/reference/generated/numpy.ndarray.fromfile.html>`__
+        and :meth:`BlockMatrix.tofile`.
 
-        While :meth:`BlockMatrix.fromfile` can also read binary files produced
-        by :meth:`BlockMatrix.tofile`, it more efficient and scalable to use
+        Note that it is more efficient and scalable to use
         :meth:`BlockMatrix.write` and :meth:`BlockMatrix.read` to save and
         restore block matrices.
 
@@ -132,15 +132,8 @@ class BlockMatrix(object):
 
         The example above is implemented as:
 
-        >>> a.tofile('output/binary')
-        >>> bm = BlockMatrix.fromfile('output/binary', 10, 20)
-
-        except that the file used to pass data from Python to Java is created
-        automatically on the driver's local disk using Python's
-        `tempfile.mkstemp
-        <https://docs.python.org/3/library/tempfile.html#tempfile.mkstemp>`__
-        function. This function places the file in a system temp directory but
-        does not automatically delete the file at exit.
+        >>> a.tofile('/tmp/binary')
+        >>> bm = BlockMatrix.fromfile('file:///tmp/binary', 10, 20)
 
         The number of entries must be less than :math:`2^{31}`.
 
@@ -166,11 +159,10 @@ class BlockMatrix(object):
         if ndarray.dtype != np.float64:
             ndarray = ndarray.astype(np.float64)
 
-        import tempfile
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            ndarray.tofile(f.name)
+        path = new_local_temp_file()
+        ndarray.tofile(get_URI(path))
 
-        return cls.fromfile(f.name, n_rows, n_cols, block_size)
+        return cls.fromfile(path, n_rows, n_cols, block_size)
 
     @classmethod
     @typecheck_method(entry_expr=expr_numeric,
@@ -391,11 +383,12 @@ class BlockMatrix(object):
         >>> from hail.linalg import BlockMatrix
         >>> import numpy as np
         >>> bm = BlockMatrix.random(10, 20)
-        >>> bm.tofile('output/binary')
+        >>> bm.tofile('file:///tmp/binary')
 
-        To create a :class:`numpy.ndarray` of the same dimensions:
+        To create a :class:`numpy.ndarray` of the same dimensions
+        from this local file:
 
-        >>> a = np.fromfile('output/binary').reshape((10, 20))
+        >>> a = np.fromfile('/tmp/binary').reshape((10, 20))
 
         Notes
         -----
@@ -403,14 +396,18 @@ class BlockMatrix(object):
 
         This method, analogous to `numpy.tofile
         <https://docs.scipy.org/doc/numpy/reference/generated/numpy.ndarray.tofile.html>`__,
-        produces a binary file of float64 values in row-major order, which can
-        be read with `numpy.fromfile
+        produces a binary file of float64 values in row-major order. If `path`
+        is the URI of a file on the driver's local disk, then the file can be
+        read with `numpy.fromfile
         <https://docs.scipy.org/doc/numpy/reference/generated/numpy.ndarray.fromfile.html>`__
         and then reshaped to the desired dimensions.
 
         While this file can also be read with :meth:`BlockMatrix.fromfile`, it
         more efficient and scalable to use :meth:`BlockMatrix.write` and
         :meth:`BlockMatrix.read` to save and restore block matrices.
+
+        Use :meth:`.utils.hadoop_copy` to copy files between local and non-local
+        storage.
 
         See also :meth:`.to_numpy`.
 
@@ -447,25 +444,17 @@ class BlockMatrix(object):
 
         The example above is implemented as:
 
-        >>> bm.tofile('output/binary')
-        >>> a = np.fromfile('output/binary').reshape((10, 20))
-
-        except that the file used to pass data from Java to Python is created
-        automatically on the driver's local disk using Python's
-        `tempfile.mkstemp
-        <https://docs.python.org/3/library/tempfile.html#tempfile.mkstemp>`__
-        function. This function places the file in a system temp directory but
-        does not automatically delete the file at exit.
+        >>> bm.tofile('file:///tmp/binary')
+        >>> a = np.fromfile('/tmp/binary').reshape((10, 20))
 
         Returns
         -------
         :class:`numpy.ndarray`
         """
-        import tempfile
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            self.tofile(f.name)
+        path = new_local_temp_file()
+        self.tofile(path)
 
-        return np.fromfile(f.name).reshape((self.n_rows, self.n_cols))
+        return np.fromfile(get_URI(path)).reshape((self.n_rows, self.n_cols))
 
     @property
     def T(self):

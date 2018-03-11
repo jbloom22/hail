@@ -248,7 +248,12 @@ class HailContext private(val sc: SparkContext,
 
   def getTemporaryFile(nChar: Int = 10, prefix: Option[String] = None, suffix: Option[String] = None): String =
     sc.hadoopConfiguration.getTemporaryFile(tmpDir, nChar, prefix, suffix)
-
+  
+  def getLocalTemporaryFile(nChar: Int = 10, prefix: Option[String] = None, suffix: Option[String] = None): String = {
+    val localTmpDir = "file:///tmp"
+    sc.hadoopConfiguration.getTemporaryFile(localTmpDir, nChar, prefix, suffix)
+  }
+  
   def importBgen(file: String,
     sampleFile: Option[String] = None,
     includeGT: Boolean,

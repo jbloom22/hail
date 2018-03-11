@@ -3,7 +3,7 @@ from hail.utils.java import Env, joption, error
 from hail.typecheck import enumeration, typecheck, nullable
 import difflib
 from collections import defaultdict, Counter
-import os
+
 
 @typecheck(n_rows=int, n_cols=int, n_partitions=nullable(int))
 def range_matrix_table(n_rows, n_cols, n_partitions=None):
@@ -107,6 +107,10 @@ def get_URI(path):
 
 def new_temp_file(n_char=10, prefix=None, suffix=None):
     return Env.hc()._jhc.getTemporaryFile(n_char, joption(prefix), joption(suffix))
+
+
+def new_local_temp_file(n_char=10, prefix=None, suffix=None):
+    return Env.hc()._jhc.getLocalTemporaryFile(n_char, joption(prefix), joption(suffix))
 
 
 storage_level = enumeration('NONE', 'DISK_ONLY', 'DISK_ONLY_2', 'MEMORY_ONLY',

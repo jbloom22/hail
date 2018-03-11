@@ -1,4 +1,4 @@
-from .misc import wrap_to_list, get_env_or_default, get_URI, new_temp_file, storage_level, range_matrix_table, range_table
+from .misc import wrap_to_list, get_env_or_default, get_URI, new_temp_file, new_local_temp_file, storage_level, range_matrix_table, range_table
 from .hadoop_utils import hadoop_copy, hadoop_read, hadoop_write, hadoop_read_binary
 from .struct import Struct
 from .linkedlist import LinkedList
@@ -11,6 +11,7 @@ __all__ = ['hadoop_read',
            'hadoop_copy',
            'wrap_to_list',
            'new_temp_file',
+           'new_local_temp_file',
            'get_env_or_default',
            'storage_level',
            'get_URI',
