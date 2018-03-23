@@ -1794,20 +1794,19 @@ def pc_relate_with_scores(ds, scores, maf, block_size=512, min_kinship=-float("i
     g = BlockMatrix.from_entry_expr(mean_imputed_gt,
                                 block_size=block_size)
 
-    pc_scores0 = ds.cols().collect()
-    pc_scores = [x.scores for x in pc_scores0]
+    ckt = ds.col_key[0].dtype
+    col_keys_and_scores = ds.select_cols(ck = ds.col_key[0], scores = ds.scores).cols().collect()
+    pc_scores = list(map(lambda x: x.scores, col_keys_and_scores))
+    col_key_java = list(map(lambda x: ckt._convert_to_j(x.ck), col_keys_and_scores))
 
     int_statistics = {"phi": 0, "phik2": 1, "phik2k0": 2, "all": 3}[statistics]
-
-    col_key_local = ds.col_key.collect() #  FIXME collect once
-    col_key_local_java = [ds.col_key.dtype._convert_to_j(x) for x in col_key_local]
 
     return Table(
         scala_object(Env.hail().methods, 'PCRelate')
         .apply(Env.hc()._jhc,
                g._jbm,
-               jarray(Env.jvm().java.lang.Object, col_key_local_java),
-               ds.col_key.dtype._jtype,
+               jarray(Env.jvm().java.lang.Object, col_key_java),
+               ckt._jtype,
                pc_scores,
                maf,
                block_size,

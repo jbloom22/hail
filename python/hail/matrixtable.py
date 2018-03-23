@@ -2326,7 +2326,7 @@ class MatrixTable(ExprContainer):
         Randomly shuffle order of columns:
 
         >>> import random
-        >>> new_sample_order = dataset.col_key.collect()
+        >>> new_sample_order = dataset.col_key[0].collect()
         >>> random.shuffle(new_sample_order)
         >>> dataset_reordered = dataset.reorder_columns(new_sample_order)
 
@@ -2335,7 +2335,7 @@ class MatrixTable(ExprContainer):
 
         This method requires the keys to be unique. `order` must contain the
         same set of keys as
-        ``dataset.col_key.collect()``. The
+        ``dataset.col_key[0].collect()``. The
         order of the keys in `order` determines the column order in the
         output dataset.
 
