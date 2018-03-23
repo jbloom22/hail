@@ -1727,7 +1727,7 @@ def pc_relate(ds, k, maf, block_size=512, min_kinship=-float("inf"), statistics=
 
     _, scores, _ = hwe_normalized_pca(ds, k, False, True)
 
-    ds = ds.annotate_cols(scores=scores[ds.s].scores)
+    ds = ds.annotate_cols(scores=scores[ds.col_key].scores)
 
     return pc_relate_with_scores(ds, ds.scores, maf, block_size, min_kinship, statistics)
 
@@ -1789,29 +1789,25 @@ def pc_relate_with_scores(ds, scores, maf, block_size=512, min_kinship=-float("i
                            naa=hl.float64(ds.GT.n_alt_alleles()))
     ds = ds.select_rows(
         *ds.row_key,
-        mean_gt=(agg.sum(ds.naa) /
-                 agg.count_where(hl.is_defined(ds.GT))))
+        mean_gt=agg.mean(ds.naa))
     mean_imputed_gt = hl.or_else(ds.naa, ds.mean_gt)
     g = BlockMatrix.from_entry_expr(mean_imputed_gt,
                                 block_size=block_size)
 
-    pc_scores = (ds.add_col_index('column_index').cols().collect())
-    pc_scores.sort(key=lambda x: x.column_index)
-    pc_scores = [x.scores for x in pc_scores]
+    pc_scores0 = ds.cols().collect()
+    pc_scores = [x.scores for x in pc_scores0]
 
     int_statistics = {"phi": 0, "phik2": 1, "phik2k0": 2, "all": 3}[statistics]
 
-    col_keys_table = ds.col_keys()
-    col_keys_local = col_keys_table.collect()
-    col_keys_schema = col_keys_table.schema
-    col_keys_local_java = [col_keys_schema._convert_to_j(x) for x in col_keys_local]
+    col_key_local = ds.col_key.collect() #  FIXME collect once
+    col_key_local_java = [ds.col_key.dtype._convert_to_j(x) for x in col_key_local]
 
     return Table(
         scala_object(Env.hail().methods, 'PCRelate')
         .apply(Env.hc()._jhc,
                g._jbm,
-               jarray(Env.jvm().java.lang.Object, col_keys_local_java),
-               col_keys_schema._jtype,
+               jarray(Env.jvm().java.lang.Object, col_key_local_java),
+               ds.col_key.dtype._jtype,
                pc_scores,
                maf,
                block_size,

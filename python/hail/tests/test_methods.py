@@ -401,15 +401,15 @@ class Tests(unittest.TestCase):
         _, _, loadings = hl.pca(dataset.GT.n_alt_alleles(), k=2, compute_loadings=False)
         self.assertEqual(loadings, None)
 
-    def _R_pc_relate(self,ds, maf):
+    def _R_pc_relate(self, ds, maf):
         import subprocess as sp
 
-        plink_file = utils.get_URI(utils.new_temp_file())
-        methods.export_plink(ds, plink_file, id=ds.s)
+        plink_file = utils.uri_path(utils.new_temp_file())
+        hl.export_plink(ds, plink_file, id=hl.str(ds.col_key[0]))
         try:
-            out = sp.check_output(
+            sp.check_output(
                 ["Rscript",
-                 test_file("is/hail/methods/runPcRelate.R"),
+                 resource("is/hail/methods/runPcRelate.R"),
                  plink_file,
                  str(maf)],
                 stderr=sp.STDOUT)
@@ -417,30 +417,31 @@ class Tests(unittest.TestCase):
             print(e.output)
             raise e
         types = {
-            'ID1': TString(),
-            'ID2': TString(),
-            'nsnp': TFloat64(),
-            'kin': TFloat64(),
-            'k0': TFloat64(),
-            'k1': TFloat64(),
-            'k2': TFloat64()
+            'ID1': hl.tstr,
+            'ID2': hl.tstr,
+            'nsnp': hl.tfloat64,
+            'kin': hl.tfloat64,
+            'k0': hl.tfloat64,
+            'k1': hl.tfloat64,
+            'k2': hl.tfloat64
         }
-        plink_kin = methods.import_table(plink_file+'.out',
-                                         delimiter=' +',
-                                         types=types)
+        plink_kin = hl.import_table(plink_file + '.out',
+                                    delimiter=' +',
+                                    types=types)
         plink_kin = plink_kin.select(i='ID1',
                                      j='ID2',
                                      kin='kin',
                                      k0='k0',
                                      k1='k1',
-                                     k2='k2').key_by('i','j')
+                                     k2='k2').key_by('i', 'j')
         return plink_kin
 
 
     def test_pc_relate_on_balding_nichols_against_R_pc_relate(self):
-        ds = methods.balding_nichols_model(3, 100, 10000)
+        ds = hl.balding_nichols_model(3, 100, 10000)
+        ds = ds.annotate_cols(sample_idx = hl.str(ds.sample_idx))
         rkin = self._R_pc_relate(ds, 0.00)
-        hkin = methods.pc_relate(ds, 2, 0.00)
+        hkin = hl.pc_relate(ds, 2, 0.00)
 
         rkin._same(hkin, tolerance=1e-4)
 
