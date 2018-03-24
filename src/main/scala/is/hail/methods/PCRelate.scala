@@ -33,7 +33,7 @@ object PCRelate {
     def map[N](f: M => N): Result[N] = Result(f(phiHat), f(k0), f(k1), f(k2))
   }
 
-  val defaultMinKinship = Double.NegativeInfinity
+  val defaultMinKinship: Double = Double.NegativeInfinity
   val defaultStatisticSubset: StatisticSubset = PhiK2K0K1
 
   private[this] def apply(hc: HailContext,
@@ -70,7 +70,7 @@ object PCRelate {
     blockedG: M,
     columnKeys: Array[Annotation],
     columnKeyType: Type,
-    pcaScores: ArrayList[ArrayList[Double]],
+    pcaScores: java.util.ArrayList[java.util.ArrayList[Double]],
     maf: Double,
     blockSize: Int,
     minKinship: Double,
