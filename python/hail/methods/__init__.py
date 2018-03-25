@@ -5,7 +5,7 @@ from .impex import export_cassandra, export_gen, export_plink, export_solr, expo
     import_matrix_table
 from .statgen import linear_regression, logistic_regression, linear_mixed_regression, skat, identity_by_descent, impute_sex, \
     genetic_relatedness_matrix, realized_relationship_matrix, pca, \
-    hwe_normalized_pca, pc_relate, pc_relate_with_scores, SplitMulti, \
+    hwe_normalized_pca, pc_relate, SplitMulti, \
     split_multi_hts, balding_nichols_model, FilterAlleles, ld_prune, min_rep
 from .qc import sample_qc, variant_qc, vep, concordance, nirvana
 from .misc import rename_duplicates, maximal_independent_set, filter_intervals
@@ -24,7 +24,6 @@ __all__ = ['trio_matrix',
            'pca',
            'hwe_normalized_pca',
            'pc_relate',
-           'pc_relate_with_scores',
            'rename_duplicates',
            'SplitMulti',
            'split_multi_hts',
