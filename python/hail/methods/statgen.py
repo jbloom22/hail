@@ -16,6 +16,7 @@ from hail.utils import wrap_to_list
 from hail.utils.java import *
 from hail.utils.misc import check_collisions
 
+
 @typecheck(dataset=MatrixTable,
            maf=nullable(expr_float64),
            bounded=bool,
@@ -1467,13 +1468,17 @@ def pca(entry_expr, k=10, compute_loadings=False, as_array=False):
         loadings = Table(loadings)
     return (jiterable_to_list(r._1()), scores, loadings)
 
+
 @typecheck(ds=MatrixTable,
-           k=int,
            maf=numeric,
+           k=nullable(int),
+           scores=nullable(expr_array(expr_float64)),
            block_size=int,
            min_kinship=numeric,
+           cache_level=enumeration("MEMORY_ONLY", "MEMORY_AND_DISK"),
            statistics=enumeration("phi", "phik2", "phik2k0", "all"))
-def pc_relate(ds, k, maf, block_size=512, min_kinship=-float("inf"), statistics="all"):
+def pc_relate(ds, maf, k=None, scores=None, block_size=512, min_kinship=-float("inf"),
+              cache_level="MEMORY_ONLY", statistics="all") -> Table:
     """Compute relatedness estimates between individuals using a variant of the
     PC-Relate method.
 
@@ -1691,69 +1696,16 @@ def pc_relate(ds, k, maf, block_size=512, min_kinship=-float("inf"), statistics=
     ds : :class:`.MatrixTable`
         A variant-keyed :class:`.MatrixTable` containing
         genotype information.
-    k : :obj:`int`
-        The number of principal components to use to distinguish ancestries.
     maf : :obj:`float`
         The minimum individual-specific allele frequency for an allele used to
         measure relatedness.
-    block_size : :obj:`int`
-        the side length of the blocks of the block-distributed matrices; this
-        should be set such that at least three of these matrices fit in memory
-        (in addition to all other objects necessary for Spark and Hail).
-    min_kinship : :obj:`float`
-        Pairs of samples with kinship lower than ``min_kinship`` are excluded
-        from the results.
-    statistics : :obj:`str`
-        the set of statistics to compute, `phi` will only compute the
-        kinship statistic, `phik2` will compute the kinship and
-        identity-by-descent two statistics, `phik2k0` will compute the
-        kinship statistics and both identity-by-descent two and zero, `all`
-        computes the kinship statistic and all three identity-by-descent
-        statistics.
-
-    Returns
-    -------
-    :class:`.Table`
-        A :class:`.Table` mapping pairs of samples to estimations of their
-        kinship and identity-by-descent zero, one, and two.
-
-        The fields of the resulting :class:`.Table` entries are of types:
-        `i`: ``ds.col_key.dtype``, `j`: ``ds.col_key.dtype``, `kin`: `Double`, `k2`: `Double`,
-        `k1`: `Double`, `k0`: `Double`. The table is keyed by `i` and `j`.
-
-    """
-    ds = require_biallelic(ds, 'pc_relate')
-    ds = require_unique_samples(ds, 'pc_relate')
-
-    _, scores, _ = hwe_normalized_pca(ds, k, False, True)
-
-    ds = ds.annotate_cols(scores=scores[ds.col_key].scores)
-
-    return pc_relate_with_scores(ds, ds.scores, maf, block_size, min_kinship, statistics)
-
-@typecheck(ds=MatrixTable,
-           scores=expr_array(expr_float64),
-           maf=numeric,
-           block_size=int,
-           min_kinship=numeric,
-           cache_level=str,
-           statistics=enumeration("phi", "phik2", "phik2k0", "all"))
-def pc_relate_with_scores(ds, scores, maf, block_size=512, min_kinship=-float("inf"), cache_level="MEMORY_ONLY", statistics="all"):
-    """The PC-Relate method parameterized by sample PC scores
-
-    See the detailed documentation at :meth:`.pc_relate`.
-
-    Parameters
-    ----------
-    ds : :class:`.MatrixTable`
-        A biallelic-variant keyed :class:`.MatrixTable` containing
-        genotype information.
+    k : :obj:`int`
+        The number of principal components to use to distinguish ancestries.
+        One and only one of ``k`` or ``scores`` is required.
     scores : :class:`ArrayNumericExpression`
         A column-indexed expression defining the principal component scores for
         each column. Every column must have the same number of scores.
-    maf : :obj:`float`
-        The minimum individual-specific allele frequency for an allele used to
-        measure relatedness.
+        One and only one of ``k`` or ``scores`` is required.
     block_size : :obj:`int`
         the side length of the blocks of the block-distributed matrices; this
         should be set such that at least three of these matrices fit in memory
@@ -1778,17 +1730,26 @@ def pc_relate_with_scores(ds, scores, maf, block_size=512, min_kinship=-float("i
         A :class:`.Table` mapping pairs of samples to estimations of their
         kinship and identity-by-descent zero, one, and two.
 
-        The fields of the resulting :class:`.Table` entries are of types: `i`:
-        ``ds.col_key.dtype``, `j`: ``ds.col_key.dtype``, `kin`:
-        :py:data:`.tfloat64`, `k2`: :py:data:`tfloat64`, `k1`:
-        :py:data:`tfloat64`, `k0`: :py:data:`tfloat64`. The table is keyed by
-        `i` and `j`.
+        The fields of the resulting :class:`.Table` entries are of types:
+        `i`: ``ds.col_key.dtype``, `j`: ``ds.col_key.dtype``, `kin`: `Double`, `k2`: `Double`,
+        `k1`: `Double`, `k0`: `Double`. The table is keyed by `i` and `j`.
+
     """
-    assert(scores._indices.source == ds)
-    # analyze('pc_relate_with_scores', scores, ds._col_indices)
-    ds = ds.annotate_cols(scores=scores)
-    ds = require_biallelic(ds, 'pc_relate_with_scores')
-    ds = require_unique_samples(ds, 'pc_relate_with_scores')
+
+    ds = require_biallelic(ds, 'pc_relate')
+    ds = require_unique_samples(ds, 'pc_relate')
+
+    if scores is None:
+        if k is None:
+            raise FatalError('One of `k` or `scores` is required for pc_relate.')
+        _, scores, _ = hwe_normalized_pca(ds, k, False, True)
+        ds = ds.annotate_cols(scores=scores[ds.col_key].scores)
+    else:
+        if k is not None:
+            raise FatalError('Both `k` and `scores` were supplied for pc_relate. Only one is required.')
+        assert (scores._indices.source == ds)
+        ds = ds.annotate_cols(scores=scores)
+
     ds = ds.select_entries(GT=ds.GT,
                            naa=hl.float64(ds.GT.n_alt_alleles()))
     ds = ds.select_rows(
@@ -1796,10 +1757,10 @@ def pc_relate_with_scores(ds, scores, maf, block_size=512, min_kinship=-float("i
         mean_gt=agg.mean(ds.naa))
     mean_imputed_gt = hl.or_else(ds.naa, ds.mean_gt)
     g = BlockMatrix.from_entry_expr(mean_imputed_gt,
-                                block_size=block_size)
+                                    block_size=block_size)
 
     ckt = ds.col_key[0].dtype
-    col_keys_and_scores = ds.select_cols(ck = ds.col_key[0], scores = ds.scores).cols().collect()
+    col_keys_and_scores = ds.select_cols(ck=ds.col_key[0], scores=ds.scores).cols().collect()
     pc_scores = list(map(lambda x: x.scores, col_keys_and_scores))
     col_key_java = list(map(lambda x: ckt._convert_to_j(x.ck), col_keys_and_scores))
 
@@ -1807,16 +1768,16 @@ def pc_relate_with_scores(ds, scores, maf, block_size=512, min_kinship=-float("i
 
     return Table(
         scala_object(Env.hail().methods, 'PCRelate')
-        .apply(Env.hc()._jhc,
-               g._jbm,
-               jarray(Env.jvm().java.lang.Object, col_key_java),
-               ckt._jtype,
-               pc_scores,
-               maf,
-               block_size,
-               min_kinship,
-               cache_level,
-               int_statistics))
+            .apply(Env.hc()._jhc,
+                   g._jbm,
+                   jarray(Env.jvm().java.lang.Object, col_key_java),
+                   ckt._jtype,
+                   pc_scores,
+                   maf,
+                   block_size,
+                   min_kinship,
+                   cache_level,
+                   int_statistics))
 
 
 class SplitMulti(object):
