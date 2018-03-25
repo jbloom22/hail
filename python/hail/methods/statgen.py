@@ -1736,8 +1736,9 @@ def pc_relate(ds, k, maf, block_size=512, min_kinship=-float("inf"), statistics=
            maf=numeric,
            block_size=int,
            min_kinship=numeric,
+           cache_level=str,
            statistics=enumeration("phi", "phik2", "phik2k0", "all"))
-def pc_relate_with_scores(ds, scores, maf, block_size=512, min_kinship=-float("inf"), statistics="all"):
+def pc_relate_with_scores(ds, scores, maf, block_size=512, min_kinship=-float("inf"), cache_level="MEMORY_ONLY", statistics="all"):
     """The PC-Relate method parameterized by sample PC scores
 
     See the detailed documentation at :meth:`.pc_relate`.
@@ -1760,6 +1761,9 @@ def pc_relate_with_scores(ds, scores, maf, block_size=512, min_kinship=-float("i
     min_kinship : :obj:`float`
         Pairs of samples with kinship lower than ``min_kinship`` are excluded
         from the results.
+    cache_level : :obj:`str`
+        the level at which to cache data, can be tweaked if encountering memory
+        errors. One of "MEMORY_ONLY" or "MEMORY_AND_DISK".
     statistics : :obj:`str`
         the set of statistics to compute, `phi` will only compute the
         kinship statistic, `phik2` will compute the kinship and
@@ -1811,6 +1815,7 @@ def pc_relate_with_scores(ds, scores, maf, block_size=512, min_kinship=-float("i
                maf,
                block_size,
                min_kinship,
+               cache_level,
                int_statistics))
 
 
