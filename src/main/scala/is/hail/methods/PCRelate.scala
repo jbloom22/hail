@@ -33,8 +33,11 @@ object PCRelate {
     def map[N](f: M => N): Result[N] = Result(f(phiHat), f(k0), f(k1), f(k2))
   }
 
-  val defaultMinKinship: Double = Double.NegativeInfinity
+  type CacheLevel = String
+
+  val defaultMinKinship = Double.NegativeInfinity
   val defaultStatisticSubset: StatisticSubset = PhiK2K0K1
+  val defaultCacheLevel: CacheLevel = "MEMORY_ONLY"
 
   private[this] def apply(hc: HailContext,
     blockedG: M,
@@ -44,9 +47,10 @@ object PCRelate {
     maf: Double,
     blockSize: Int,
     minKinship: Double,
+    cacheLevelString: String,
     statistics: PCRelate.StatisticSubset): Table = {
 
-    val result = new PCRelate(maf, blockSize, statistics)(blockedG, pcs)
+    val result = new PCRelate(maf, blockSize, statistics, cacheLevelString)(blockedG, pcs)
 
     PCRelate.toTable(hc, result, columnKeys, columnKeyType, blockSize, minKinship, statistics)
   }
@@ -59,21 +63,23 @@ object PCRelate {
     maf: Double,
     blockSize: Int,
     minKinship: Double,
+    cacheLevelString: String,
     statistics: PCRelate.StatisticSubset): Table = {
 
     val pcs = rowsToBDM(pcaScores)
 
-    apply(hc, blockedG, columnKeys, columnKeyType, pcs, maf, blockSize, minKinship, statistics)
+    apply(hc, blockedG, columnKeys, columnKeyType, pcs, maf, blockSize, minKinship, cacheLevelString, statistics)
   }
 
   def apply(hc: HailContext,
     blockedG: M,
     columnKeys: Array[Annotation],
     columnKeyType: Type,
-    pcaScores: java.util.ArrayList[java.util.ArrayList[Double]],
+    pcaScores: ArrayList[ArrayList[Double]],
     maf: Double,
     blockSize: Int,
     minKinship: Double,
+    cacheLevelString: String,
     statistics: PCRelate.StatisticSubset): Table = apply(hc,
       blockedG,
       columnKeys,
@@ -82,6 +88,7 @@ object PCRelate {
       maf,
       blockSize,
       minKinship,
+      cacheLevelString,
       statistics)
 
 
@@ -89,34 +96,35 @@ object PCRelate {
     pcaScores: Array[Array[Double]],
     maf: Double,
     blockSize: Int): Table =
-    apply(vds, pcaScores, maf, blockSize, defaultMinKinship, defaultStatisticSubset)
+    apply(vds, pcaScores, maf, blockSize, defaultMinKinship, defaultCacheLevel, defaultStatisticSubset)
 
   def apply(vds: MatrixTable,
     pcaScores: Array[Array[Double]],
     maf: Double,
     blockSize: Int,
     statisticSubset: StatisticSubset): Table =
-    apply(vds, pcaScores, maf, blockSize, defaultMinKinship, statisticSubset)
+    apply(vds, pcaScores, maf, blockSize, defaultMinKinship, defaultCacheLevel, statisticSubset)
 
   def apply(vds: MatrixTable,
     pcaScores: Array[Array[Double]],
     maf: Double,
     blockSize: Int,
     minKinship: Double): Table =
-    apply(vds, pcaScores, maf, blockSize, minKinship, defaultStatisticSubset)
+    apply(vds, pcaScores, maf, blockSize, minKinship, defaultCacheLevel, defaultStatisticSubset)
 
   def apply(vds: MatrixTable,
     pcaScores: Array[Array[Double]],
     maf: Double,
     blockSize: Int,
     minKinship: Double,
+    cacheLevelString: String,
     statistics: PCRelate.StatisticSubset): Table = {
 
     vds.requireUniqueSamples("pc_relate")
     val g = vdsToMeanImputedMatrix(vds)
     val blockedG = BlockMatrix.fromIRM(g, blockSize).cache()
 
-    apply(vds.hc, blockedG, vds.stringSampleIds.toArray[Annotation], TString(), pcaScores, maf, blockSize, minKinship, statistics)
+    apply(vds.hc, blockedG, vds.stringSampleIds.toArray[Annotation], TString(), pcaScores, maf, blockSize, minKinship, cacheLevelString, statistics)
   }
 
   // cribbing old tests
@@ -131,7 +139,7 @@ object PCRelate {
     val g = vdsToMeanImputedMatrix(vds)
     val blockedG = BlockMatrix.fromIRM(g, blockSize).cache()
 
-    apply(vds.hc, blockedG, vds.stringSampleIds.toArray[Annotation], TString(), pcs, maf, blockSize, minKinship, statistics)
+    apply(vds.hc, blockedG, vds.stringSampleIds.toArray[Annotation], TString(), pcs, maf, blockSize, minKinship, defaultCacheLevel, statistics)
   }
 
   private def rowsToBDM(x: Array[Array[Double]]): DenseMatrix[Double] = {
@@ -256,11 +264,18 @@ object PCRelate {
   }
 }
 
-class PCRelate(maf: Double, blockSize: Int, statistics: PCRelate.StatisticSubset) extends Serializable {
+class PCRelate(maf: Double, blockSize: Int, statistics: PCRelate.StatisticSubset, cacheLevelString: String) extends Serializable {
   import PCRelate._
 
   require(maf >= 0.0)
   require(maf <= 1.0)
+  require(cacheLevelString == "MEMORY_ONLY" || cacheLevelString == "MEMORY_AND_DISK")
+
+  val cacheLevel = if (cacheLevelString == "MEMORY_AND_DISK") {
+    StorageLevel.MEMORY_AND_DISK
+  } else {
+    StorageLevel.MEMORY_ONLY
+  }
 
   def badmu(mu: Double): Boolean =
     mu <= maf || mu >= (1.0 - maf) || mu <= 0.0 || mu >= 1.0
@@ -269,12 +284,12 @@ class PCRelate(maf: Double, blockSize: Int, statistics: PCRelate.StatisticSubset
     gt != 0.0 && gt != 1.0 && gt != 2.0
 
   private def gram(m: M): M = {
-    val mc = m.cache()
+    val mc = m.persist(cacheLevel)
     mc.t * mc
   }
 
  private[this] def cacheWhen(statisticsLevel: StatisticSubset)(m: M): M =
-    if (statistics >= statisticsLevel) m.cache() else m
+    if (statistics >= statisticsLevel) m.persist(cacheLevel) else m
 
   def apply(blockedG: M, pcs: DenseMatrix[Double]): Result[M] = {
     val preMu = this.mu(blockedG, pcs)
@@ -283,7 +298,7 @@ class PCRelate(maf: Double, blockSize: Int, statistics: PCRelate.StatisticSubset
         Double.NaN
       else
         mu
-   } (blockedG, preMu).cache()
+   } (blockedG, preMu).persist(cacheLevel)
     val variance = cacheWhen(PhiK2)(
       mu.map(mu => if (mu.isNaN) 0.0 else mu * (1.0 - mu)))
     val phi = cacheWhen(PhiK2)(
@@ -344,7 +359,7 @@ class PCRelate(maf: Double, blockSize: Int, statistics: PCRelate.StatisticSubset
         if (mu.isNaN || g != 0.0) 0.0 else 1.0
       } (g, mu)
 
-    val temp = (homalt.t * homref).cache()
+    val temp = (homalt.t * homref).persist(cacheLevel)
 
     temp +:+ temp.t
   }
