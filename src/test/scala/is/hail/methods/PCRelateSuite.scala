@@ -3,15 +3,11 @@ package is.hail.methods
 import breeze.linalg.{DenseMatrix => BDM}
 import is.hail.{SparkSuite, TestUtils}
 import is.hail.linalg.BlockMatrix
-import is.hail.expr.types._
-import is.hail.io.plink.ExportPlink
 import is.hail.stats._
-import is.hail.utils.{TextTableReader, _}
+import is.hail.utils._
 import is.hail.variant.MatrixTable
 import is.hail.methods.PCASuite.samplePCA
 import org.testng.annotations.Test
-
-import scala.sys.process._
 
 class PCRelateSuite extends SparkSuite {
   private val blockSize: Int = BlockMatrix.defaultBlockSize
@@ -44,50 +40,6 @@ class PCRelateSuite extends SparkSuite {
       .mapValues(quadMap(toBoxedD).tupled)
       .asInstanceOf[Map[(String, String), (java.lang.Double, java.lang.Double, java.lang.Double, java.lang.Double)]]
 
-  def runPcRelateR(
-    vds: MatrixTable,
-    maf: Double,
-    rFile: String = "src/test/resources/is/hail/methods/runPcRelate.R"): Map[(String, String), (Double, Double, Double, Double)] = {
-
-    val tmpfile = tmpDir.createTempFile(prefix = "pcrelate")
-    val localTmpfile = tmpDir.createLocalTempFile(prefix = "pcrelate")
-
-    ExportPlink(vds, tmpfile)
-
-    for (suffix <- Seq(".bed", ".bim", ".fam")) {
-      hadoopConf.copy(tmpfile + suffix, localTmpfile + suffix)
-    }
-
-    s"Rscript $rFile ${uriPath(localTmpfile)} $maf" !
-
-    val columns = Map(
-      ("ID1", TString()),
-      ("ID2", TString()),
-      ("nsnp", TFloat64()),
-      ("kin", TFloat64()),
-      ("ibd0", TFloat64()),
-      ("ibd1", TFloat64()),
-      ("ibd2", TFloat64()))
-    val separator = " +"
-
-    hadoopConf.copy(localTmpfile + ".out", tmpfile + ".out")
-
-    val (_, rdd) = TextTableReader.read(sc)(Array(tmpfile + ".out"), columns, separator=separator)
-    rdd.collect()
-      .map(_.value)
-      .map { ann =>
-      val row = ann
-      val id1 = toS(row(0))
-      val id2 = toS(row(1))
-      val kin = toD(row(3))
-      val k0 = toD(row(4))
-      val k1 = toD(row(5))
-      val k2 = toD(row(6))
-      ((id1, id2), (kin, k0, k1, k2))
-    }
-      .toMap
-  }
-
   def compareDoubleQuadruplet(cmp: (Double, Double) => Boolean)(x: (Double, Double, Double, Double), y: (Double, Double, Double, Double)): Boolean =
     cmp(x._1, y._1) && cmp(x._2, y._2) && cmp(x._3, y._3) && cmp(x._4, y._4)
 
@@ -102,17 +54,6 @@ class PCRelateSuite extends SparkSuite {
     assert(mapSameElements(us, truth, compareDoubleQuadruplet((x, y) => math.abs(x - y) < 1e-14)))
   }
 
-  @Test(enabled = false)
-  def trivialReferenceMatchesR() {
-    val genotypeMatrix = new BDM(4,8,Array(0,0,0,0, 0,0,1,0, 0,1,0,1, 0,1,1,1, 1,0,0,0, 1,0,1,0, 1,1,0,1, 1,1,1,1)) // column-major, columns == variants
-    val vds = vdsFromCallMatrix(hc)(TestUtils.unphasedDiploidGtIndicesToBoxedCall(genotypeMatrix), Some(Array("s1","s2","s3","s4")))
-    val pcsArray = Array(0.0, 1.0, 1.0, 0.0,  1.0, 1.0, 0.0, 0.0) // NB: this **MUST** be the same as the PCs used by the R script
-    val pcs = new BDM(4, 2, pcsArray)
-    val usRef = PCRelateReferenceImplementation(vds, pcs)._1
-    val truth = runPcRelateR(vds, maf=0.0, "src/test/resources/is/hail/methods/runPcRelateOnTrivialExample.R")
-    assert(mapSameElements(usRef, truth, compareDoubleQuadruplet((x, y) => math.abs(x - y) < 1e-14)))
-  }
-
   @Test
   def baldingNicholsMatchesReference() {
     val seed = 0
@@ -125,19 +66,6 @@ class PCRelateSuite extends SparkSuite {
     val actual = runPcRelateHail(vds, pcs, maf=0.01).mapValues(quadMap(toD).tupled)
 
     assert(mapSameElements(actual, truth, compareDoubleQuadruplet((x, y) => math.abs(x - y) < 1e-14)))
-  }
-
-  @Test(enabled = false)
-  def baldingNicholsReferenceMatchesR() {
-    val seed = 0
-    val n = 100
-    val nVariants = 10000
-    val vds: MatrixTable = BaldingNicholsModel(hc, 3, n, nVariants, None, None, seed, None, UniformDist(0.1,0.9))
-    val pcs = samplePCA(vds, 2)._2
-    val truth = runPcRelateR(vds, maf=0.01)
-    val actual = PCRelateReferenceImplementation(vds, pcs, maf=0.01)._1
-
-    assert(mapSameElements(actual, truth, compareDoubleQuadruplet((x, y) => D_==(x, y, tolerance=1e-2))))
   }
 
   private def compareBDMs(l: BDM[Double], r: BDM[Double], tolerance: Double) {
@@ -193,18 +121,6 @@ class PCRelateSuite extends SparkSuite {
     compareBDMs(actual_g, truth_g, tolerance=1e-14)
 
     assert(mapSameElements(actual, truth, compareDoubleQuadruplet((x, y) => math.abs(x - y) < 1e-14)))
-  }
-
-  @Test(enabled = false)
-  def sampleVcfReferenceMatchesR() {
-    val vds = TestUtils.splitMultiHTS(hc.importVCF("src/test/resources/sample.vcf.bgz"))
-
-    val pcs = samplePCA(vds.coalesce(10), 2)._2
-
-    val truth = runPcRelateR(vds, maf=0.01)
-    val actual = PCRelateReferenceImplementation(vds, pcs, maf=0.01)._1
-
-    assert(mapSameElements(actual, truth, compareDoubleQuadruplet((x, y) => math.abs(x - y) < 1e-2)))
   }
 
   @Test
