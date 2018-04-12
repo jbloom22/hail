@@ -3,7 +3,7 @@ package is.hail.stats
 import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV}
 import is.hail.HailContext
 import is.hail.annotations.{Region, RegionValue, RegionValueBuilder}
-import is.hail.expr.types.{TArray, TFloat64, TStruct}
+import is.hail.expr.types.{TFloat64, TInt64, TStruct}
 import is.hail.linalg.RowMatrix
 import is.hail.table.Table
 import is.hail.utils._
@@ -16,17 +16,20 @@ object LinearMixedModel {
     delta: Double, residualSq: Double, y: Array[Double], C: BDM[Double],
     Py: Array[Double], PC: BDM[Double], Z: Array[Double], ydy: Double, Cdy: Array[Double], CdC: BDM[Double]) =
     
-    new LinearMixedModel(hc, LMMData(delta, residualSq, BDV(y), C, BDV(Py), PC, BDV(Z), ydy, BDV(Cdy), CdC))
+    new LinearMixedModel(hc,
+      LMMData(delta, residualSq, BDV(y), C, BDV(Py), PC, BDV(Z), ydy, BDV(Cdy), CdC))
 }
 
 class LinearMixedModel(hc: HailContext, lmmData: LMMData) {
-  val rowType = TStruct(
+  
+  def fit(pathXt: String, pathPXt: String, partitionSize: Int): Table = {
+    val rowType = TStruct(
+      "idx" -> TInt64(),
       "beta" -> TFloat64(),
       "sigma_sq" -> TFloat64(),
       "chi_sq" -> TFloat64(),
       "p_value" -> TFloat64())
-
-  def fit(pathXt: String, pathPXt: String, partitionSize: Int): Table = {
+    
     val Xt = RowMatrix.readBlockMatrix(hc, pathXt, partitionSize)
     val PXt = RowMatrix.readBlockMatrix(hc, pathPXt, partitionSize)
     
@@ -37,66 +40,66 @@ class LinearMixedModel(hc: HailContext, lmmData: LMMData) {
     val lmmDataBc = sc.broadcast(lmmData)
     val rowTypeBc = sc.broadcast(rowType)
 
-    val rvd = Xt.rows.zipPartitions(PXt.rows, preservesPartitioning = true) { case (itx, itPx) =>
-      val LMMData(delta, nullResidualSq, y, c, py, pc, z, ydy, cdy, cdc) = lmmDataBc.value
-      val C = c
-      val Py = py
-      val PC = pc
-      val Z = z
-      val Cdy = cdy.copy
-      val CdC = cdc.copy
+    val rdd = Xt.rows.zipPartitions(PXt.rows, preservesPartitioning = true) { case (itx, itPx) =>
+      val LMMData(delta, nullResidualSq, y, c, py, pc, z, ydy, cdy0, cdc0) = lmmDataBc.value
+      val cdy = cdy0.copy
+      val cdc = cdc0.copy
 
-      val n = C.rows
-      val nCovs = C.cols
-      val dof = n - nCovs - 1
+      val n = c.rows
+      val dof = n - c.cols - 1
       val r0 = 0 to 0
-      val r1 = 1 to nCovs
+      val r1 = 1 to c.cols
 
       val region = Region()
       val rv = RegionValue(region)
       val rvb = new RegionValueBuilder(region)
-      val localRowType = rowTypeBc.value
+      val rowType = rowTypeBc.value
+      
+      itx.zip(itPx).map { case ((i, x0),(i2, px0)) =>
+        assert(i == i2)
 
-      new Iterator[RegionValue] {
-        override def hasNext: Boolean = {
-          val hn = itx.hasNext
-          assert(hn == itPx.hasNext)
-          hn
-        }
+        val x = BDV(x0)
+        val px = BDV(px0)
+        val zpx = z *:* px
 
-        def next(): RegionValue = {
-          val (i, x0) = itx.next()
-          val (i2, px0) = itPx.next()
-          assert(i == i2)
+        cdy(0) = (y dot x) / delta + (py dot zpx)
 
-          val x = BDV(x0)
-          val Px = BDV(px0)
-          val ZPx = Z *:* Px
+        cdc(0, 0) = (x dot x) / delta + (px dot zpx)
+        cdc(r0, r1) := (c.t * x) / delta + pc.t * zpx
+        cdc(r1, r0) := cdc(0, r1).t
 
-          Cdy(0) = (y dot x) / delta + (Py dot ZPx)
+        region.clear()
+        rvb.start(rowType)
+        try {
+          val beta = cdc \ cdy
+          val residualSq = ydy - (cdy dot beta)
+          val sigmaSq = residualSq / dof
+          val chiSq = n * math.log(nullResidualSq / residualSq)
+          val pValue = chiSquaredTail(chiSq, 1)
 
-          CdC(0, 0) = (x dot x) / delta + (Px dot ZPx)
-          CdC(r0, r1) := (C.t * x) / delta + PC.t * ZPx
-          CdC(r1, r0) := CdC(0, r1).t
-
-          try {
-            val b = CdC \ Cdy
-            val residualSq = ydy - (Cdy dot b)
-            val sigmaSq = residualSq / dof
-            val chiSq = n * math.log(nullResidualSq / residualSq)
-            val pValue = chiSquaredTail(chiSq, 1)
-            
-            rvb.start(fullRowType)
+          rvb.startStruct()
+          rvb.addLong(i)
+          rvb.addDouble(beta(0))
+          rvb.addDouble(sigmaSq)
+          rvb.addDouble(chiSq)
+          rvb.addDouble(pValue)
+          rvb.endStruct()
+        } catch {
+          case _: breeze.linalg.MatrixSingularException =>
             rvb.startStruct()
-            
-            
-          } catch {
-            case e: breeze.linalg.MatrixSingularException => // rvb null
-          }
-        }
+            rvb.addLong(i)
+            rvb.setMissing()
+            rvb.setMissing()
+            rvb.setMissing()
+            rvb.setMissing()
+            rvb.endStruct()
+        } k
+        
+        rv.setOffset(rvb.end())
+        rv
       }
     }
     
-    new Table()
+    new Table(hc, rdd, rowType, Array("idx"))
   }
 }
