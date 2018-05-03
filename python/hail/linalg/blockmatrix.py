@@ -127,7 +127,6 @@ class BlockMatrix(object):
 
         To create a block matrix of the same dimensions:
 
-        >>> from hail.linalg import BlockMatrix
         >>> bm = BlockMatrix.fromfile('file:///local/file', 10, 20) # doctest: +SKIP
 
         Notes
@@ -258,8 +257,14 @@ class BlockMatrix(object):
                       block_size=nullable(int),
                       seed=int,
                       uniform=bool)
-    def random(cls, n_rows, n_cols, block_size=None, seed=0, uniform=True):
-        """Creates a block matrix with uniform or normal random entries.
+    def random(cls, n_rows, n_cols, block_size=None, seed=0, uniform=False):
+        """Creates a block matrix with standard normal or uniform random entries.
+
+        Examples
+        --------
+        Create a block matrix with 10 rows, 20 columns, and standard normal entries:
+
+        >>> a = BlockMatrix.random(10, 20)
 
         Parameters
         ----------
@@ -481,8 +486,6 @@ class BlockMatrix(object):
 
         Examples
         --------
-
-        >>> from hail.linalg import BlockMatrix
         >>> import numpy as np
         >>> bm = BlockMatrix.random(10, 20)
         >>> bm.tofile('file:///local/file') # doctest: +SKIP
@@ -532,8 +535,6 @@ class BlockMatrix(object):
 
         Examples
         --------
-
-        >>> from hail.linalg import BlockMatrix
         >>> bm = BlockMatrix.random(10, 20)
         >>> a = bm.to_numpy()
 
@@ -870,8 +871,6 @@ class BlockMatrix(object):
 
         Examples
         --------
-
-        >>> from hail.linalg import BlockMatrix
         >>> import numpy as np
         >>> block_matrix = BlockMatrix.from_numpy(np.matrix([[5, 7], [2, 8]]), 2)
         >>> entries_table = block_matrix.entries()
@@ -899,47 +898,169 @@ class BlockMatrix(object):
         """
         return Table(self._jbm.entriesTable(Env.hc()._jhc))
 
-    @typecheck_method(partition_size=int)
-    def to_row_matrix(self, partition_size):
-        """Creates a row matrix from a block matrix.
+    @typecheck(input=str,
+               output=str,
+               delimiter=str,
+               header=nullable(str),
+               add_index=bool,
+               partition_size=int,
+               parallel=nullable(enumeration('separate_header', 'header_per_shard')),
+               entries=enumeration('full', 'lower', 'strict_lower', 'upper', 'strict_upper'))
+    def export(self, input, output, delimiter='\t', header=None, add_index=False, parallel=None,
+               partition_size=None, entries='full'):
+        """Exports a stored block matrix as a delimited text file.
+
+        Warning
+        -------
+        The block matrix must be stored in row-major format, as results
+        from :meth:`.BlockMatrix.write` with ``force_row_major=True`` and from
+        :meth:`.BlockMatrix.write_from_entry_expr`. Otherwise,
+        :meth:`export` will produce an error message.
 
         Examples
         --------
-        >>> bm = BlockMatrix.random(3, 3)
-        >>> rm = bm.to_row_matrix(2)
+        Consider the following matrix.
+
+        >>> import numpy as np
+        >>> nd = np.array([[1.0, 0.8, 0.7],
+        ...                [0.8, 1.0 ,0.3],
+        ...                [0.7, 0.3, 1.0]])
+        >>> BlockMatrix.from_numpy(nd).write('output/example.bm')
+
+        Export the full matrix as a file with tab-separated values:
+
+        >>> BlockMatrix.export('output/example.bm', 'output/example.tsv')
+
+        Export the upper-triangle of the matrix as a file of
+        comma-separated values.
+
+        >>> BlockMatrix.export(input='output/example.bm',
+        ...                    output='output/example.csv',
+        ...                    delimiter=',',
+        ...                    entries='upper')
+
+        Export the full matrix with row indices in parallel as a folder of
+        files, each with a header line for columns ``idx``, ``A``, ``B``,
+        and ``C``.
+
+        >>> BlockMatrix.export(input='output/example.bm',
+        ...                    output='output/example',
+        ...                    header='\t'.join(['idx', 'A', 'B', 'C']),
+        ...                    add_index=True,
+        ...                    partition_size=2,
+        ...                    parallel='header_per_shard')
+
+        This produces two files:
+
+        .. code-block:: text
+
+            idx A   B   C
+            0   1.0 0.8 0.7
+            1   0.8 1.0 0.3
+
+        .. code-block:: text
+
+            idx A   B   C
+            2   0.7 0.3 1.0
 
         Notes
         -----
-        The number of partitions in the resulting row matrix equals
-        the ceiling of ``n_rows / partition_size``.
+        The five options for `entries` are illustrated below.
 
-        For example, consider a block matrix with :math:`10^6` rows,
-        :math:`10^5` columns, and block size :math:`2^{12}` (4096). 
-        A partition size of :math:`2^{10}` (1024) will result
-        in a row matrix with 977 partitions. with all but the last partition
-        containing 1024 full rows, e.g. 781 MB of 8-byte floats.
+        Full:
 
-        For good parallelism and load balancing, it's good practice to have
-        at least a few partitions per core. Setting the partition size
-        to an exact (rather than approximate) divisor or multiple of the
-        block size reduces superfluous shuffling of data.
+        .. code-block:: text
 
-        See also :meth:`.RowMatrix.read_from_block_matrix`.
+            1.0 0.8 0.7
+            0.8 1.0 0.3
+            0.7 0.3 1.0
+
+        Lower triangle:
+
+        .. code-block:: text
+
+            1.0
+            0.8 1.0
+            0.7 0.3 1.0
+
+        Strict lower triangle:
+
+        .. code-block:: text
+
+            0.8
+            0.7 0.3
+
+        Upper triangle:
+
+        .. code-block:: text
+
+            1.0 0.8 0.7
+            1.0 0.3
+            1.0
+
+        Strict upper triangle:
+
+        .. code-block:: text
+
+            0.8 0.7
+            0.3
+
+        The number of partitions (file shards) exported equals the ceiling
+        of ``n_rows / partition_size``. By default, there is one partition
+        per row of blocks in the block matrix. The number of partitions
+        should be at least the number of cores for efficient parallelism.
+        Setting the partition size to an exact (rather than approximate)
+        divisor or multiple of the block size reduces superfluous shuffling
+        of data.
+
+        If ``parallel` is ``None``, these file shards are then serially
+        concatenated by one core into one file, a slow process. See
+        other options below.
 
         Parameters
         ----------
-        partition_size: :obj:`int`
-            Number of rows to group per partition.
-
-        Returns
-        -------
-        :class:`RowMatrix`
+        input: :obj:`str`
+            Path to input block matrix, stored row-major on disk.
+        output: :obj:`str`
+            Path for export.
+        delimiter: :obj:`str`
+            Column delimiter.
+        header: :obj:`str`, optional
+            If provided, `header` is prepended before the first row of data.
+        add_index: :obj:`bool`
+            If ``True``, add an initial column with the absolute row index.
+        partition_size: :obj:`int`, optional
+            Number of rows to group per partition for export.
+            Default given by block size of the block matrix.
+        parallel: :obj:`str`, optional
+            If ``'header_per_shard'``, create a folder with one file per
+            partition, each with a header if provided.
+            If ``'separate_header'``, create a folder with one file per
+            partition without a header; write the header, if provided, in
+            a separate file.
+            If ``None``, serially concatenate the header and all partitions
+            into one file; export will be slower.
+            If `header` is ``None`` then ``'header_per_shard'`` and
+            ``'separate_header'`` are equivalent.
+        entries: :obj:`str
+            Describes which entries to export. One of:
+            ``'full'``, ``'lower'``, ``'strict_lower'``, ``'upper'``, ``'strict_upper'``.
         """
+        jrm = Env.hail().linalg.RowMatrix.readBlockMatrix(Env.hc()._jhc, input, joption(partition_size))
 
-        path = new_temp_file()
-        self.write(path, force_row_major=True)
+        export_type = Env.hail().utils.ExportType.getExportType(parallel)
 
-        return hl.linalg.RowMatrix.read_from_block_matrix(path, partition_size)
+        if entries == 'full':
+            jrm.export(output, delimiter, joption(header), add_index, export_type)
+        elif entries == 'lower':
+            jrm.exportLowerTriangle(output, delimiter, joption(header), add_index, export_type)
+        elif entries == 'strict_lower':
+            jrm.exportStrictLowerTriangle(output, delimiter, joption(header), add_index, export_type)
+        elif entries == 'upper':
+            jrm.exportUpperTriangle(output, delimiter, joption(header), add_index, export_type)
+        else:
+            assert entries == 'strict_upper'
+            jrm.exportStrictUpperTriangle(output, delimiter, joption(header), add_index, export_type)
 
 
 block_matrix_type.set(BlockMatrix)

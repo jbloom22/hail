@@ -25,10 +25,10 @@ object RowMatrix {
     partitionCounts
   }
 
-  def readBlockMatrix(hc: HailContext, uri: String, partSize: Int): RowMatrix = {
+  def readBlockMatrix(hc: HailContext, uri: String, partSize: Option[Int]): RowMatrix = {
     val BlockMatrixMetadata(blockSize, nRows, nCols, partFiles) = BlockMatrix.readMetadata(hc, uri)
     val gp = GridPartitioner(blockSize, nRows, nCols)
-    val partitionCounts = computePartitionCounts(partSize, gp.nRows)
+    val partitionCounts = computePartitionCounts(partSize.getOrElse(blockSize), gp.nRows)
     RowMatrix(hc, new ReadBlocksAsRowsRDD(uri, hc.sc, partFiles, partitionCounts, gp), gp.nCols.toInt, gp.nRows, partitionCounts)
   }
 }
