@@ -525,10 +525,10 @@ class BlockMatrix(object):
         ...                [13.0, 14.0, 15.0, 16.0]])
         >>> bm = BlockMatrix.from_numpy(nd, block_size=2)
 
-        Filter to from one below the diagonal to two above the
-        diagonal:
+        Filter to a band from one below the diagonal to
+        two above the diagonal collect to NumPy:
 
-        >>> bm.sparsify_band(lower=-1, upper=2)
+        >>> bm.sparsify_band(lower=-1, upper=2).to_numpy()
 
         .. code-block:: text
 
@@ -537,9 +537,10 @@ class BlockMatrix(object):
                    [ 0., 10., 11., 12.],
                    [ 0.,  0., 15., 16.]])
 
-        Set all blocks fully outside the diagonal to zero:
+        Set all blocks fully outside the diagonal to zero
+        and collect to NumPy:
 
-        >>> bm.sparsify_band(lower=0, upper=0, blocks_only=True)
+        >>> bm.sparsify_band(lower=0, upper=0, blocks_only=True).to_numpy()
 
         .. code-block:: text
 
@@ -605,9 +606,9 @@ class BlockMatrix(object):
         ...                [13.0, 14.0, 15.0, 16.0]])
         >>> bm = BlockMatrix.from_numpy(nd, block_size=2)
 
-        Filter to the upper triangle:
+        Filter to the upper triangle and collect to NumPy:
 
-        >>> bm.sparsify_triangle()
+        >>> bm.sparsify_triangle().to_numpy()
 
         .. code-block:: text
 
@@ -616,9 +617,10 @@ class BlockMatrix(object):
                    [ 0.,  0., 11., 12.],
                    [ 0.,  0.,  0., 16.]])
 
-        Set all blocks fully outside the upper triangle to zero:
+        Set all blocks fully outside the upper triangle to zero
+        and collect to NumPy:
  
-        >>> bm.sparsify_triangle(blocks_only=True)
+        >>> bm.sparsify_triangle(blocks_only=True).to_numpy()
 
         .. code-block:: text
 
@@ -675,7 +677,8 @@ class BlockMatrix(object):
         ...                [13.0, 14.0, 15.0, 16.0]])
         >>> bm = BlockMatrix.from_numpy(nd, block_size=2)
 
-        Set all elements outside the given row intervals to zero:
+        Set all elements outside the given row intervals to zero
+        and collect to NumPy:
 
         >>> (bm.sparsify_row_intervals(starts=[1, 0, 2, 2],
         ...                            stops= [2, 0, 3, 4])
@@ -689,7 +692,7 @@ class BlockMatrix(object):
                    [ 0.,  0., 15., 16.]])
 
         Set all blocks fully outside the given row intervals to
-        blocks of zeros:
+        blocks of zeros and collect to NumPy:
 
         >>> (bm.sparsify_row_intervals(starts=[1, 0, 2, 2],
         ...                            stops= [2, 0, 3, 4],
@@ -1328,6 +1331,136 @@ class BlockMatrix(object):
         else:
             assert entries == 'strict_upper'
             jrm.exportStrictUpperTriangle(output, delimiter, joption(header), add_index, export_type)
+
+    @typecheck_method(rectangles=sequenceof(sequenceof(int)))
+    def sparsify_rectangles(self, rectangles):
+        """Filter to blocks overlapping the union of rectangular regions.
+
+        Warning
+        -------
+        The block matrix must be stored in row-major format, as results
+        from :meth:`.BlockMatrix.write` with ``force_row_major=True`` and from
+        :meth:`.BlockMatrix.write_from_entry_expr`. Otherwise,
+        :meth:`export` will produce an error message.
+
+        Examples
+        --------
+        Consider the following block matrix:
+
+        >>> import numpy as np
+        >>> nd = np.array([[ 1.0,  2.0,  3.0,  4.0],
+        ...                [ 5.0,  6.0,  7.0,  8.0],
+        ...                [ 9.0, 10.0, 11.0, 12.0],
+        ...                [13.0, 14.0, 15.0, 16.0]])
+        >>> bm = BlockMatrix.from_numpy(nd)
+
+        Filter to blocks covering three rectangles and collect to NumPy:
+
+        >>> bm.filter_rectangles([[0, 1, 0, 1], [0, 3, 0, 2], [1, 2, 0, 4]]).to_numpy()
+
+        .. code-block:: text
+
+            array([[ 1.,  2.,  3.,  4.],
+                   [ 5.,  6.,  7.,  8.],
+                   [ 9., 10.,  0.,  0.],
+                   [13., 14.,  0.,  0.]])
+        Notes
+        -----
+        This methods creates a sparse block matrix by zeroing out (dropping)
+        all blocks which are disjoint from the union of a set of rectangular
+        regions. Partially overlapping blocks are *not* modified.
+
+        The number of rectangles must be less than :math:`2^{31}`.
+
+        Parameters
+        ----------
+        rectangles: :obj:`list` of :obj:`list` of :obj:`int`
+            Rectangles. # FIXME elaborate
+
+        Returns
+        -------
+        :class:`.BlockMatrix`
+            Sparse block matrix.
+        """
+        import itertools
+        flattened_rectangles = list(itertools.chain.from_iterable(rectangles))
+
+        return BlockMatrix(self._jbm.filterRectangles(flattened_rectangles))
+
+    @staticmethod
+    @typecheck(input=str,
+               output=str,
+               rectangles=sequenceof(sequenceof(int)),
+               delimiter=str)
+    def export_rectangles(input, output, rectangles, delimiter='\t'):
+        """Export rectangular regions from a stored block matrix to delimited text files.
+
+        Examples
+        --------
+        Consider the following block matrix:
+
+        >>> import numpy as np
+        >>> nd = np.array([[ 1.0,  2.0,  3.0,  4.0],
+        ...                [ 5.0,  6.0,  7.0,  8.0],
+        ...                [ 9.0, 10.0, 11.0, 12.0],
+        ...                [13.0, 14.0, 15.0, 16.0]])
+        >>>
+        >>> rectangles = [[0, 1, 0, 1], [0, 3, 0, 2], [1, 2, 0, 4]]
+
+        Filter to the three rectangles and write.
+
+        >>> (BlockMatrix.from_numpy(nd)
+        ...     .sparsify_rectangles(rectangles)
+        ...     .write('output/example.bm', force_row_major=True))
+
+        Export the three rectangles to TSV files:
+
+        >>> BlockMatrix.export_rectangles(
+        ...     input='output/example.bm',
+        ...     output='output/example',
+        ...     rectangles = rectangles)
+
+        This produces three files:
+
+        .. code-block:: text
+
+            1.0
+
+        .. code-block:: text
+
+            1.0 2.0
+            5.0 6.0
+            9.0 10.0
+
+        .. code-block:: text
+
+            5.0 6.0 7.0 8.0
+
+        Notes
+        -----
+        This method exports the rectangular regions of the block matrix
+        to delimited text files, in parallel over rectangles.
+
+        All overlapping blocks must be present.  # FIXME elaborate
+
+        The number of rectangles must be less than :math:`2^{31}`.
+
+        Parameters
+        ----------
+        input: :obj:`srt`
+            Path to input block matrix, stored row-major on disk.
+        output: :obj:`str`
+            Path for folder of exported files.
+        rectangles: :obj:`list` of :obj:`list` of :obj:`int`
+            Rectangles. # FIXME elaborate
+        delimiter: :obj:`str`
+            Column delimiter.
+        """
+        import itertools
+        flattened_rectangles = list(itertools.chain.from_iterable(rectangles))
+
+        return Env.hail().linalg.BlockMatrix.exportRectangles(
+            Env.hc()._jhc, input, output, flattened_rectangles, delimiter)
 
 
 block_matrix_type.set(BlockMatrix)

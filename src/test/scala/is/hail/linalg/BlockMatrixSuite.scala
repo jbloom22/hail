@@ -1048,4 +1048,23 @@ class BlockMatrixSuite extends SparkSuite {
       assert(actual === expected)
     }
   }
+  
+  @Test
+  def testExportRectangular() {
+    val input = tmpDir.createTempFile("test")
+    val output = "/tmp/rectangles"
+    val rectangles = Array(
+      Array[Long](0, 8, 0, 8),
+      Array[Long](3, 6, 3, 6),
+      Array[Long](4, 9, 4, 9),
+      Array[Long](0, 9, 0, 10))
+
+    val blockSize = 10
+    val lm = new BDM[Double](9, 10, (0 until 90).map(_.toDouble).toArray)
+    val bm = BlockMatrix.fromBreezeMatrix(sc, lm, blockSize)
+
+    bm.write(input, forceRowMajor = true)
+    
+    BlockMatrix.exportRectangles(hc, input, output, rectangles.flatten) // FIXME: move to Python
+  }
 }
