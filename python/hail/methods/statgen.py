@@ -235,7 +235,7 @@ def impute_sex(call, aaf_threshold=0.0, include_par=False, female_threshold=0.2,
            covariates=sequenceof(expr_float64),
            root=str,
            block_size=int)
-def linear_regression(y, x, covariates=(), root='linreg', block_size=16) -> MatrixTable:
+def linear_regression(y, x, covariates, root='linreg', block_size=16) -> MatrixTable:
     """For each row, test an input variable for association with
     response variables using linear regression.
 
@@ -251,7 +251,8 @@ def linear_regression(y, x, covariates=(), root='linreg', block_size=16) -> Matr
     :func:`.linear_regression` considers the same set of columns (i.e., samples, points)
     for every response variable and row, namely those columns for which **all**
     response variables and covariates are defined. For each row, missing values
-    of `x` are mean-imputed over these columns.
+    of `x` are mean-imputed over these columns. As in the example, the intercept
+    covariate ``1.0`` must be included explicitly if desired.
 
     Notes
     -----
@@ -376,13 +377,12 @@ def linear_regression(y, x, covariates=(), root='linreg', block_size=16) -> Matr
            x=expr_float64,
            covariates=sequenceof(expr_float64),
            root=str)
-def logistic_regression(test, y, x, covariates=(), root='logreg') -> MatrixTable:
+def logistic_regression(test, y, x, covariates, root='logreg') -> MatrixTable:
     r"""For each row, test an input variable for association with a
     binary response variable using logistic regression.
 
     Examples
     --------
-
     Run the logistic regression Wald test per variant using a Boolean
     phenotype, intercept and two covariates stored in column-indexed
     fields:
@@ -399,7 +399,8 @@ def logistic_regression(test, y, x, covariates=(), root='logreg') -> MatrixTable
     variable in predicting a binary (case-control) response variable based on
     the logistic regression model. The response variable type must either be
     numeric (with all present values 0 or 1) or Boolean, in which case true and
-    false are coded as 1 and 0, respectively.
+    false are coded as 1 and 0, respectively. As in the example, the intercept
+    covariate ``1.0`` must be included explicitly if desired.
 
     Hail supports the Wald test ('wald'), likelihood ratio test ('lrt'), Rao
     score test ('score'), and Firth test ('firth'). Hail only includes columns
@@ -566,7 +567,7 @@ def logistic_regression(test, y, x, covariates=(), root='logreg') -> MatrixTable
     x : :class:`.Float64Expression`
         Entry-indexed expression for input variable.
     covariates : :obj:`list` of :class:`.Float64Expression`
-        List of column-indexed covariate expressions.
+        Non-empty list of column-indexed covariate expressions.
     root : :obj:`str`, optional
         Name of resulting row-indexed field.
 
@@ -576,6 +577,9 @@ def logistic_regression(test, y, x, covariates=(), root='logreg') -> MatrixTable
         Matrix table with regression results in a new row-indexed field.
 
     """
+    if len(covariates) == 0:
+        raise ValueError('logistic regression requires at least one covariate expression')
+
     mt = matrix_table_source('logistic_regression/x', x)
     check_entry_indexed('logistic_regression/x', x)
 
@@ -629,7 +633,7 @@ def logistic_regression(test, y, x, covariates=(), root='logreg') -> MatrixTable
            sparsity_threshold=numeric,
            n_eigenvectors=nullable(int),
            dropped_variance_fraction=(nullable(float)))
-def linear_mixed_regression(kinship_matrix, y, x, covariates=[], global_root="lmmreg_global",
+def linear_mixed_regression(kinship_matrix, y, x, covariates, global_root="lmmreg_global",
                             row_root="lmmreg", run_assoc=True, use_ml=False, delta=None,
                             sparsity_threshold=1.0, n_eigenvectors=None, dropped_variance_fraction=None) -> MatrixTable:
     r"""Use a kinship-based linear mixed model to estimate the genetic component
@@ -651,25 +655,27 @@ def linear_mixed_regression(kinship_matrix, y, x, covariates=[], global_root="lm
         lmmreg_tsv = hl.import_table('data/example_lmmreg.tsv', 'Sample', impute=True)
         lmmreg_ds = lmmreg_ds.annotate_cols(**lmmreg_tsv[lmmreg_ds['s']])
         lmmreg_ds = lmmreg_ds.annotate_rows(use_in_kinship = lmmreg_ds.variant_qc.AF > 0.05)
-        lmmreg_ds.write('data/example_lmmreg.vds', overwrite=True)
+        lmmreg_ds.write('data/example_lmmreg.mt', overwrite=True)
 
-    >>> lmm_ds = hl.read_matrix_table("data/example_lmmreg.vds")
+    >>> lmm_ds = hl.read_matrix_table("data/example_lmmreg.mt")
     >>> kinship_matrix = hl.realized_relationship_matrix(lmm_ds.filter_rows(lmm_ds.use_in_kinship)['GT'])
     >>> lmm_ds = hl.linear_mixed_regression(kinship_matrix,
     ...                                     y=lmm_ds.pheno,
     ...                                     x=lmm_ds.GT.n_alt_alleles(),
-    ...                                     covariates=[lmm_ds.cov1, lmm_ds.cov2])
+    ...                                     covariates=[1.0, lmm_ds.cov1, lmm_ds.cov2])
 
     Notes
     -----
-    Suppose the variant dataset saved at :file:`data/example_lmmreg.vds` has a
+    Suppose the matrix table saved at :file:`data/example_lmmreg.mt` has a
     Boolean variant-indexed field `use_in_kinship` and numeric or Boolean
     sample-indexed fields `pheno`, `cov1`, and `cov2`. Then the
     :func:`.linear_mixed_regression` function in the above example will execute
     the following four steps in order:
 
     1) filter to samples in given kinship matrix to those for which
-       `ds.pheno`, `ds.cov`, and `ds.cov2` are all defined
+       `lmm_ds.pheno`, `lmm_ds.cov`, and `lmm_ds.cov2` are all defined.
+       Note that the intercept covariate is included explicitly as ``1.0``
+       and defined for all samples.
     2) compute the eigendecomposition :math:`K = USU^T` of the kinship matrix
     3) fit covariate coefficients and variance parameters in the
        sample-covariates-only (global) model using restricted maximum
@@ -1067,7 +1073,7 @@ def linear_mixed_regression(kinship_matrix, y, x, covariates=[], global_root="lm
     x : :class:`.Float64Expression`
         Entry-indexed expression for input variable.
     covariates : :obj:`list` of :class:`.Float64Expression`
-        List of column-indexed covariate expressions.
+        Non-empty list of column-indexed covariate expressions.
     global_root : :obj:`str`
         Global field root.
     row_root : :obj:`str`
@@ -1092,6 +1098,8 @@ def linear_mixed_regression(kinship_matrix, y, x, covariates=[], global_root="lm
     :class:`.MatrixTable`
         Matrix table with regression results in new global and (optionally) row-indexed fields.
     """
+    if len(covariates) == 0:
+        raise ValueError('logistic regression requires at least one covariate expression')
 
     mt = matrix_table_source('linear_mixed_regression/x', x)
     check_entry_indexed('linear_mixed_regression/x', x)
@@ -1150,7 +1158,7 @@ def linear_mixed_regression(kinship_matrix, y, x, covariates=[], global_root="lm
            max_size=int,
            accuracy=numeric,
            iterations=int)
-def skat(key_expr, weight_expr, y, x, covariates=[], logistic=False,
+def skat(key_expr, weight_expr, y, x, covariates, logistic=False,
          max_size=46340, accuracy=1e-6, iterations=10000) -> Table:
     r"""Test each keyed group of rows for association by linear or logistic
     SKAT test.
@@ -1170,14 +1178,14 @@ def skat(key_expr, weight_expr, y, x, covariates=[], logistic=False,
         burden_ds = hl.variant_qc(burden_ds)
         genekt = hl.import_locus_intervals('data/gene.interval_list')
         burden_ds = burden_ds.annotate_rows(gene = genekt[burden_ds.locus])
-        burden_ds.write('data/example_burden.vds', overwrite=True)
+        burden_ds.write('data/example_burden.mt', overwrite=True)
 
-    >>> burden_ds = hl.read_matrix_table('data/example_burden.vds')
+    >>> burden_ds = hl.read_matrix_table('data/example_burden.mt')
     >>> skat_table = hl.skat(key_expr=burden_ds.gene,
     ...                      weight_expr=burden_ds.weight,
     ...                      y=burden_ds.burden.pheno,
     ...                      x=burden_ds.GT.n_alt_alleles(),
-    ...                      covariates=[burden_ds.burden.cov1, burden_ds.burden.cov2])
+    ...                      covariates=[1.0, burden_ds.burden.cov1, burden_ds.burden.cov2])
 
     .. caution::
 
@@ -1203,9 +1211,10 @@ def skat(key_expr, weight_expr, y, x, covariates=[], logistic=False,
     `Rare-Variant Association Testing for Sequencing Data with the Sequence Kernel Association Test
     <https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3135811/>`__.
 
-    The test is run on columns with `y` and all `covariates` non-missing. For
-    each row, missing input (`x`) values are imputed as the mean of all
-    non-missing input values.
+    The test is run on columns with `y` and all `covariates` non-missing.
+    As in the example, the intercept covariate ``1.0`` must be included
+    explicitly if desired. For each row, missing input (`x`) values are
+    imputed as the mean of all non-missing input values.
 
     Row weights must be non-negative. Rows with missing weights are ignored. In
     the R package ``skat``---which assumes rows are variants---default weights
@@ -2039,7 +2048,7 @@ def split_multi_hts(ds, keep_star=False, left_aligned=False) -> MatrixTable:
     Examples
     --------
 
-    >>> hl.split_multi_hts(dataset).write('output/split.vds')
+    >>> hl.split_multi_hts(dataset).write('output/split.mt')
 
     Notes
     -----

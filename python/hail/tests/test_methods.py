@@ -144,6 +144,32 @@ class Tests(unittest.TestCase):
         self.assertTrue(t1._same(t4a))
         self.assertTrue(t1._same(t4b))
 
+    def test_linear_regression_without_intercept(self):        
+        pheno = hl.import_table(resource('regressionLinear.pheno'),
+                                key='Sample',
+                                missing='0',
+                                types={'Pheno': hl.tfloat})
+
+        mt = hl.import_vcf(resource('regressionLinear.vcf'))
+        mt = hl.linear_regression(y=pheno[mt.s].Pheno,
+                                  x=mt.GT.n_alt_alleles(),
+                                  covariates=[])
+
+        results = dict(mt.aggregate_rows(hl.agg.collect((mt.locus.position, mt.linreg))))
+
+        self.assertAlmostEqual(results[1].beta, 1.5, places=6)
+        self.assertAlmostEqual(results[1].standard_error, 1.161895, places=6)
+        self.assertAlmostEqual(results[1].t_stat, 1.290994, places=6)
+        self.assertAlmostEqual(results[1].p_value, 0.25317, places=6)
+
+    # comparing to R:
+    # y = c(1, 1, 2, 2, 2, 2)
+    # x = c(0, 1, 0, 0, 0, 1)
+    # c1 = c(0, 2, 1, -2, -2, 4)
+    # c2 = c(-1, 3, 5, 0, -4, 3)
+    # df = data.frame(y, x, c1, c2)
+    # fit <- lm(y ~ x + c1 + c2, data=df)
+    # summary(fit)["coefficients"]
     def test_linear_regression_with_two_cov(self):
 
         covariates = hl.import_table(resource('regressionLinear.cov'),
@@ -369,6 +395,17 @@ class Tests(unittest.TestCase):
                                                      eq(mt.multi.beta[1], mt.multi.beta[0]) &
                                                      eq(mt.multi.y_transpose_x[1], mt.multi.y_transpose_x[0]))))
 
+    # comparing to R:
+    # x = c(0, 1, 0, 0, 0, 1, 0, 0, 0, 0)
+    # y = c(0, 0, 1, 1, 1, 1, 0, 0, 1, 1)
+    # c1 = c(0, 2, 1, -2, -2, 4, 1, 2, 3, 4)
+    # c2 = c(-1, 3, 5, 0, -4, 3, 0, -2, -1, -4)
+    # logfit <- glm(y ~ x + c1 + c2, family=binomial(link="logit"))
+    # waldtest <- coef(summary(logfit))
+    # beta <- waldtest["x", "Estimate"]
+    # se <- waldtest["x", "Std. Error"]
+    # zstat <- waldtest["x", "z value"]
+    # pval <- waldtest["x", "Pr(>|z|)"]
     def test_logistic_regression_wald_test_two_cov(self):
         covariates = hl.import_table(resource('regressionLogistic.cov'),
                                      key='Sample',

@@ -182,17 +182,16 @@ class SkatSuite extends SparkSuite {
 
     val vds = (if (useBN) vdsBN else vdsSkat)
       .selectEntries(s"{x: $entryExpr}")
-      .annotateColsExpr("Cov1" -> "sa.cov.Cov1", "Cov2" -> "sa.cov.Cov2")
+      .annotateColsExpr("Intercept" -> "1.0", "Cov1" -> "sa.cov.Cov1", "Cov2" -> "sa.cov.Cov2")
 
     val hailKT = vds
-      .skat("gene", "weight", "pheno", "x", Array("Cov1", "Cov2"), logistic)
+      .skat("gene", "weight", "pheno", "x", Array("Intercept", "Cov1", "Cov2"), logistic)
 
     hailKT.typeCheck()
 
     var resultHail = hailKT.rdd.collect()
 
-    var resultsR = skatInR(vds, "gene", "weight", "pheno",
-      Array("Cov1", "Cov2"), logistic, useDosages)
+    var resultsR = skatInR(vds, "gene", "weight", "pheno", Array("Intercept", "Cov1", "Cov2"), logistic, useDosages)
     if (useBN) {
       resultHail.sortBy(_.getAs[Int](0))
       resultsR.sortBy(_.getAs[Int](0))
@@ -234,6 +233,21 @@ class SkatSuite extends SparkSuite {
   @Test def logisticDosages() { hailVsRTest(useDosages = true, logistic = true) }
   @Test def logisticBN() { hailVsRTest(useBN = true, logistic = true, qstatTol = 1e-4) }
 
+  
+  @Test def noCovRuns() {
+   vdsSkat
+     .selectEntries("{x: g.GT.nNonRefAlleles().toFloat64}")
+     .annotateRowsExpr("weight" -> "1.0")
+     .skat("gene", yExpr = "pheno", xField = "x", weightExpr = "weight")
+     .collect()
+   
+   vdsSkat
+     .selectEntries("{x: g.GT.nNonRefAlleles().toFloat64}")
+     .annotateRowsExpr("weight" -> "1.0")
+     .skat("gene", yExpr = "pheno", xField = "x", weightExpr = "weight", logistic=true)
+     .collect()
+  }
+  
   //testing size and maxSize
   @Test def maxSizeTest() {
     val maxSize = 27
