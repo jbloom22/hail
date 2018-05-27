@@ -326,6 +326,9 @@ class Tests(unittest.TestCase):
         # sqrt
         assert_close(m.sqrt(), m ** 0.5)
 
+        # log
+        self.assertTrue(np.allclose(m.log().to_numpy(), np.log(nm)))
+
     def test_matrix_ops(self):
         def assert_eq(a, b):
             self.assertTrue(np.array_equal(self.np_matrix(a), self.np_matrix(b)))

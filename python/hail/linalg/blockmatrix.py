@@ -191,6 +191,8 @@ class BlockMatrix(object):
     - Division of a scalar or broadcasted vector by a block matrix.
 
     - Exponentiation by a negative exponent.
+
+    - Natural logarithm, :meth:`log`.
     """
     def __init__(self, jbm):
         self._jbm = jbm
@@ -1261,6 +1263,15 @@ class BlockMatrix(object):
         :class:`.BlockMatrix`
         """
         return BlockMatrix(self._jbm.sqrt())
+
+    def log(self):
+        """Element-wise natural logarithm.
+
+        Returns
+        -------
+        :class:`.BlockMatrix`
+        """
+        return BlockMatrix(self._jbm.log())
 
     def diagonal(self):
         """Extracts diagonal elements as ndarray.
