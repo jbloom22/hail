@@ -1624,15 +1624,15 @@ class Tests(unittest.TestCase):
         ht = hl.balding_nichols_model(1, 5, 5).rows().add_index()
         ht = ht.annotate(cm = centimorgans[hl.int32(ht.idx)]).cache()
 
-        starts, stops = hl.locus_windows(ht, 2)
+        starts, stops = hl.locus_windows(ht.locus, 2)
         assert_eq(starts, [0, 0, 0, 1, 2])
         assert_eq(stops, [3, 4, 5, 5, 5])
 
-        starts, stops = hl.locus_windows(ht, 0.5, value_expr=ht.cm)
+        starts, stops = hl.locus_windows(ht.locus, 0.5, value_expr=ht.cm)
         assert_eq(starts, [0, 1, 1, 1, 3])
         assert_eq(stops, [1, 4, 4, 5, 5])
 
-        starts, stops = hl.locus_windows(ht, 1.0, value_expr=2 * centimorgans[hl.int32(ht.idx)])
+        starts, stops = hl.locus_windows(ht.locus, 1.0, value_expr=2 * centimorgans[hl.int32(ht.idx)])
         assert_eq(starts, [0, 1, 1, 1, 3])
         assert_eq(stops, [1, 4, 4, 5, 5])
 
@@ -1647,15 +1647,14 @@ class Tests(unittest.TestCase):
              hl.tstruct(locus=hl.tlocus('GRCh37'), cm=hl.tfloat64),
              key=['locus'])
 
-        starts, stops = hl.locus_windows(ht, 1)
+        starts, stops = hl.locus_windows(ht.locus, 1)
         assert_eq(starts, [0, 0, 2, 3, 3, 5])
         assert_eq(stops, [2, 2, 3, 5, 5, 6])
 
-        starts, stops = hl.locus_windows(ht, 1.0, value_expr=ht.cm)
+        starts, stops = hl.locus_windows(ht.locus, 1.0, value_expr=ht.cm)
         assert_eq(starts, [0, 1, 1, 3, 3, 5])
         assert_eq(stops, [1, 3, 3, 5, 5, 6])
 
         from hail.expr.expressions import ExpressionException
-        self.assertRaises(ExpressionException,
-            lambda: hl.locus_windows(ht, 1.0,
-                value_expr=hl.locus_windows(ht, 1.0, value_expr=hl.utils.range_table(1).idx)))
+        with self.assertRaises(ExpressionException):
+            hl.locus_windows(ht.locus, 1.0, value_expr=hl.utils.range_table(1).idx)

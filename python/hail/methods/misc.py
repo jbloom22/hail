@@ -420,6 +420,7 @@ def array_windows(a, radius):
             raise ValueError(f"array_windows: 'a' must be an ndarray of signed integer or float values, "
                              f"found dtype {str(a.dtype)}")
     if (not np.all(a[:-1] <= a[1:])) or (a.size == 1 and np.isnan(a[0])):
+        print(a)
         raise ValueError("array_windows: 'a' must be non-decreasing with no nan elements")
     size = a.size
     if size > 0:
@@ -444,10 +445,10 @@ def array_windows(a, radius):
     return starts, stops
 
 
-@typecheck(locus_table=Table,
+@typecheck(locus_expr=expr_locus(),
            radius=oneof(int, float),
            value_expr=nullable(expr_float64))
-def locus_windows(locus_table, radius, value_expr=None):
+def locus_windows(locus_expr, radius, value_expr=None):
     """Returns start and stop indices for window around each locus.
 
     Examples
@@ -455,7 +456,7 @@ def locus_windows(locus_table, radius, value_expr=None):
     Windows with 2bp radius for one contig with positions 1, 2, 3, 4, 5:
 
     >>> starts, stops = hl.locus_windows(
-    ...     locus_table=hl.balding_nichols_model(1, 5, 5).rows(),
+    ...     hl.balding_nichols_model(1, 5, 5).locus,
     ...     radius=2)
     >>> starts, stops
     (array([0, 0, 0, 1, 2]), array([3, 4, 5, 5, 5]))
@@ -475,20 +476,16 @@ def locus_windows(locus_table, radius, value_expr=None):
 
     Windows with 1bp radius:
 
-    >>> hl.locus_windows(ht, 1)
+    >>> hl.locus_windows(ht.locus, 1)
     (array([0, 0, 2, 3, 3, 5]), array([2, 2, 3, 5, 5, 6]))
 
     Windows with 1cm radius:
 
-    >>> hl.locus_windows(ht, 1.0, value_expr=ht.cm)
+    >>> hl.locus_windows(ht.locus, 1.0, value_expr=ht.cm)
     (array([0, 1, 1, 3, 3, 5]), array([1, 3, 3, 5, 5, 6]))
 
     Notes
     -----
-    The first key field of `locus_table` must be of type :py:data:`tlocus`, as
-    is true for variant-keyed datasets. The rows are then ordered by locus, i.e.
-    by contig and then by position within contig.
-
     This function returns two 1-dimensional ndarrays of integers,
     ``starts`` and ``stops``, each of size equal to the number of rows.
 
@@ -497,8 +494,8 @@ def locus_windows(locus_table, radius, value_expr=None):
     ``position[i] - radius <= position[j] <= position[i] + radius``.
 
     Set `value_expr` to use a value other than position to define the windows.
-    This row-indexed numeric expression on `locus_table` must be non-missing,
-    as well as non-decreasing with respect to locus for each contig; otherwise
+    This row-indexed numeric expression must be non-missing, as well as
+    non-decreasing with respect to locus for each contig; otherwise
     the function will fail.
 
     The last example above uses centimorgan coordinates, so
@@ -512,12 +509,13 @@ def locus_windows(locus_table, radius, value_expr=None):
 
     Parameters
     ----------
-    locus_table : :class:`.Table`
-        Table with first key of type :py:data:`tlocus`.
+    locus_expr : :class:`.LocusExpression`
+        Row-indexed locus expression on a table or matrix table.
     radius: :obj:`int`
         Radius of window for row values.
-    value_expr: :obj:`str`, optional
-        Row-indexed numeric expression on `locus_table` for the row value.
+    value_expr: :class:`.Float64Expression`, optional
+        Row-indexed numeric expression for the row value.
+        Must be on the same table or matrix table as `locus_expr`.
         By default, the row value is given by the locus position.
 
     Returns
@@ -528,9 +526,41 @@ def locus_windows(locus_table, radius, value_expr=None):
     if radius < 0:
         raise ValueError(f'locus_windows: radius must be non-negative, found {radius}')
 
-    require_first_key_field_locus(locus_table, 'locus_windows/locus_table')
-    ht = locus_table
+    # check row-indexed and on same table or matrix table
+    # collect abs positions and possibly values
+    # get contig start values from reference genome
+    # check that abs positions are ordered
+    # find breakpoints in array of positions (while loop)
+    # compute array windows as below
+    
+    
+    
+    contig_start = np.array([0, 2])
+    abs_pos = np.array([0, 1, 2, 3])
 
+    if (not np.all(a[:-1] <= a[1:])) or (a.size == 1 and np.isnan(a[0])):
+        print(a)
+        raise ValueError("array_windows: 'a' must be non-decreasing with no nan elements")
+    
+    n_pos = len(abs_pos)
+    c = 0
+    while i < n_pos:
+        if ()
+    
+
+    check_row_indexed('locus_windows', locus_expr)
+
+    ht = locus_expr._indices.source
+
+    if value_expr=None
+
+    ht.select(loci = hl.struct(locus_expr))
+
+    ht.x.collect()
+
+    loci = locus_expr.collect()
+
+    print(loci)
     if value_expr is None:
         ht = ht.key_by(ht.key[0]).select()
         contigs_table = ht.group_by(ht.key[0].contig).aggregate(values=agg.collect(ht.key[0].position))
