@@ -1,7 +1,6 @@
 import numpy as np
 
 import hail as hl
-import hail.expr.aggregators as agg
 from hail.expr.expr_ast import VariableReference
 from hail.expr.expressions import *
 from hail.expr.types import *
@@ -420,7 +419,6 @@ def array_windows(a, radius):
             raise ValueError(f"array_windows: 'a' must be an ndarray of signed integer or float values, "
                              f"found dtype {str(a.dtype)}")
     if (not np.all(a[:-1] <= a[1:])) or (a.size == 1 and np.isnan(a[0])):
-        print(a)
         raise ValueError("array_windows: 'a' must be non-decreasing with no nan elements")
     size = a.size
     if size > 0:
@@ -447,8 +445,8 @@ def array_windows(a, radius):
 
 @typecheck(locus_expr=expr_locus(),
            radius=oneof(int, float),
-           value_expr=nullable(expr_float64))
-def locus_windows(locus_expr, radius, value_expr=None):
+           coord_expr=nullable(expr_float64))
+def locus_windows(locus_expr, radius, coord_expr=None):
     """Returns start and stop indices for window around each locus.
 
     Examples
@@ -481,7 +479,7 @@ def locus_windows(locus_expr, radius, value_expr=None):
 
     Windows with 1cm radius:
 
-    >>> hl.locus_windows(ht.locus, 1.0, value_expr=ht.cm)
+    >>> hl.locus_windows(ht.locus, 1.0, coord_expr=ht.cm)
     (array([0, 1, 1, 3, 3, 5]), array([1, 3, 3, 5, 5, 6]))
 
     Notes
@@ -493,10 +491,15 @@ def locus_windows(locus_expr, radius, value_expr=None):
     range of row indices ``j`` such that ``contig[i] == contig[j]`` and
     ``position[i] - radius <= position[j] <= position[i] + radius``.
 
-    Set `value_expr` to use a value other than position to define the windows.
-    This row-indexed numeric expression must be non-missing, as well as
-    non-decreasing with respect to locus for each contig; otherwise
-    the function will fail.
+    If ``locus_expr.global_position()`` is not in ascending order, this method
+    will fail. This order should hold for a matrix table keyed by locus or
+    variant (and the associated row table), or for a table that's been ordered
+    by `locus_expr`.
+
+    Set `coord_expr` to use a value other than position to define the windows.
+    This row-indexed numeric expression must be non-missing, non-``nan``, on the
+    same source as `locus_expr`, and non-decreasing with respect to locus
+    position for each contig; otherwise the function will fail.
 
     The last example above uses centimorgan coordinates, so
     ``[starts[i], stops[i])`` is the maximal range of row indices ``j`` such
@@ -513,7 +516,7 @@ def locus_windows(locus_expr, radius, value_expr=None):
         Row-indexed locus expression on a table or matrix table.
     radius: :obj:`int`
         Radius of window for row values.
-    value_expr: :class:`.Float64Expression`, optional
+    coord_expr: :class:`.Float64Expression`, optional
         Row-indexed numeric expression for the row value.
         Must be on the same table or matrix table as `locus_expr`.
         By default, the row value is given by the locus position.
@@ -526,60 +529,55 @@ def locus_windows(locus_expr, radius, value_expr=None):
     if radius < 0:
         raise ValueError(f'locus_windows: radius must be non-negative, found {radius}')
 
-    # check row-indexed and on same table or matrix table
-    # collect abs positions and possibly values
-    # get contig start values from reference genome
-    # check that abs positions are ordered
-    # find breakpoints in array of positions (while loop)
-    # compute array windows as below
-    
-    
-    
-    contig_start = np.array([0, 2])
-    abs_pos = np.array([0, 1, 2, 3])
-
-    if (not np.all(a[:-1] <= a[1:])) or (a.size == 1 and np.isnan(a[0])):
-        print(a)
-        raise ValueError("array_windows: 'a' must be non-decreasing with no nan elements")
-    
-    n_pos = len(abs_pos)
-    c = 0
-    while i < n_pos:
-        if ()
-    
-
     check_row_indexed('locus_windows', locus_expr)
 
-    ht = locus_expr._indices.source
+    use_pos = coord_expr is None
+    src = locus_expr._indices.source
 
-    if value_expr=None
-
-    ht.select(loci = hl.struct(locus_expr))
-
-    ht.x.collect()
-
-    loci = locus_expr.collect()
-
-    print(loci)
-    if value_expr is None:
-        ht = ht.key_by(ht.key[0]).select()
-        contigs_table = ht.group_by(ht.key[0].contig).aggregate(values=agg.collect(ht.key[0].position))
+    if use_pos:
+        global_pos = np.array(locus_expr.global_position().collect(), dtype=np.int64)
+        coord = global_pos
+        n_loci = coord.size
     else:
-        # FIXME: remove once select_entries on a field is free
-        if value_expr in ht._fields_inverse:
-            field = ht._fields_inverse[value_expr]
-            ht = ht.select(field)
-            ht = ht.key_by(ht.key[0])
-        else:
-            field = Env.get_uid()
-            ht = ht.select(**{field: value_expr})
-        contigs_table = ht.group_by(ht.key[0].contig).aggregate(values=agg.collect(ht[field]))
+        check_row_indexed('locus_windows', coord_expr)
+        global_pos_and_coord =\
+            hl.tuple([locus_expr.global_position(), coord_expr]).collect()  # raises exception if sources differ
+        n_loci = len(global_pos_and_coord)
 
-    contig_values = contigs_table.order_by(contigs_table.contig).values.collect()
-    contig_offsets = np.concatenate((np.array([0]), np.cumsum([len(contig) for contig in contig_values])))
-    contig_bounds = [array_windows(np.array(values), radius) for values in contig_values]
-    contigs = range(0, len(contig_values))
+        global_pos = np.zeros(n_loci, dtype=np.int64)
+        coord = np.zeros(n_loci, dtype=np.float64)
+        for i in range(n_loci):
+            global_pos[i] = global_pos_and_coord[i][0]
+            coord[i] = global_pos_and_coord[i][1]
+        del global_pos_and_coord
 
-    starts = np.concatenate([contig_offsets[c] + contig_bounds[c][0] for c in contigs])
-    stops = np.concatenate([contig_offsets[c] + contig_bounds[c][1] for c in contigs])
+    if n_loci == 0:
+        return np.zeros(shape=0, dtype=np.int64), np.zeros(shape=0, dtype=np.int64)
+
+    if not np.all(global_pos[:-1] <= global_pos[1:]):
+        raise ValueError("locus_windows: 'locus_expr' must be ordered with respect to global position")
+
+    contig_name = locus_expr.dtype.reference_genome.contigs
+    contig_len = locus_expr.dtype.reference_genome.lengths
+    contig_cum_len = np.cumsum([contig_len[name] for name in contig_name])
+
+    assert(global_pos[-1] < contig_cum_len[-1])
+
+    contig_start_idx = [0]
+    cum_len_iter = iter(contig_cum_len)
+    i = 0
+    cum_len = next(cum_len_iter)
+    while i < n_loci:
+        while global_pos[i] >= cum_len:
+            contig_start_idx.append(i)
+            cum_len = next(cum_len_iter)
+        i += 1
+
+    n_contigs = len(contig_start_idx)
+    contig_start_idx.append(n_loci)
+    contig_bounds = [array_windows(coord[contig_start_idx[c]:contig_start_idx[c + 1]], radius)
+                     for c in range(n_contigs)]
+    starts = np.concatenate([contig_start_idx[c] + contig_bounds[c][0] for c in range(n_contigs)])
+    stops = np.concatenate([contig_start_idx[c] + contig_bounds[c][1] for c in range(n_contigs)])
+
     return starts, stops

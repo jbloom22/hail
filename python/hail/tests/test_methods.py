@@ -1621,18 +1621,18 @@ class Tests(unittest.TestCase):
 
         centimorgans = hl.literal([0.1, 1.0, 1.0, 1.5, 1.9])
 
-        ht = hl.balding_nichols_model(1, 5, 5).rows().add_index()
-        ht = ht.annotate(cm = centimorgans[hl.int32(ht.idx)]).cache()
+        mt = hl.balding_nichols_model(1, 5, 5).add_row_index()
+        mt = mt.annotate_rows(cm=centimorgans[hl.int32(mt.row_idx)]).cache()
 
-        starts, stops = hl.locus_windows(ht.locus, 2)
+        starts, stops = hl.locus_windows(mt.locus, 2)
         assert_eq(starts, [0, 0, 0, 1, 2])
         assert_eq(stops, [3, 4, 5, 5, 5])
 
-        starts, stops = hl.locus_windows(ht.locus, 0.5, value_expr=ht.cm)
+        starts, stops = hl.locus_windows(mt.locus, 0.5, coord_expr=mt.cm)
         assert_eq(starts, [0, 1, 1, 1, 3])
         assert_eq(stops, [1, 4, 4, 5, 5])
 
-        starts, stops = hl.locus_windows(ht.locus, 1.0, value_expr=2 * centimorgans[hl.int32(ht.idx)])
+        starts, stops = hl.locus_windows(mt.locus, 1.0, coord_expr=2 * centimorgans[hl.int32(mt.row_idx)])
         assert_eq(starts, [0, 1, 1, 1, 3])
         assert_eq(stops, [1, 4, 4, 5, 5])
 
@@ -1651,10 +1651,15 @@ class Tests(unittest.TestCase):
         assert_eq(starts, [0, 0, 2, 3, 3, 5])
         assert_eq(stops, [2, 2, 3, 5, 5, 6])
 
-        starts, stops = hl.locus_windows(ht.locus, 1.0, value_expr=ht.cm)
+        starts, stops = hl.locus_windows(ht.locus, 1.0, coord_expr=ht.cm)
         assert_eq(starts, [0, 1, 1, 3, 3, 5])
         assert_eq(stops, [1, 3, 3, 5, 5, 6])
 
+        with self.assertRaises(ValueError) as cm:
+            hl.locus_windows(ht.order_by(ht.cm).locus, 1.0)
+        self.assertTrue('must be ordered' in str(cm.exception))
+
         from hail.expr.expressions import ExpressionException
-        with self.assertRaises(ExpressionException):
-            hl.locus_windows(ht.locus, 1.0, value_expr=hl.utils.range_table(1).idx)
+        with self.assertRaises(ExpressionException) as cm:
+            hl.locus_windows(ht.locus, 1.0, coord_expr=hl.utils.range_table(1).idx)
+        self.assertTrue('different source' in str(cm.exception))
