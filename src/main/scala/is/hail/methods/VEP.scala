@@ -172,11 +172,39 @@ object VEP {
     (Locus(a(0), a(1).toInt), a(3) +: a(4).split(","))
   }
 
+  def getCSQHeaderDefinition(cmd: Array[String], perl5lib: String, path: String): Option[String] = {
+    val csqHeaderRegex = "ID=CSQ[^>]+Description=\"([^\"]+)".r
+    val pb = new ProcessBuilder(cmd.toList.asJava)
+    val env = pb.environment()
+    if (perl5lib != null)
+      env.put("PERL5LIB", perl5lib)
+    if (path != null)
+      env.put("PATH", path)
+    val (jt, proc) = List((Locus("1", 13372), IndexedSeq("G", "C"))).iterator.pipe(pb,
+      printContext,
+      printElement,
+      _ => ())
+
+    val csqHeader = jt.flatMap(s => csqHeaderRegex.findFirstMatchIn(s).map(m => m.group(1)))
+    val rc = proc.waitFor()
+    if (rc != 0)
+      fatal(s"vep command failed with non-zero exit status $rc")
+
+    if (csqHeader.hasNext)
+      Some(csqHeader.next())
+    else {
+      warn("Could not get VEP CSQ header")
+      None
+    }
+  }
+
   def annotate(vsm: MatrixTable, config: String, root: String = "va.vep", csq: Boolean,
     blockSize: Int): MatrixTable = {
     assert(vsm.rowKey == FastIndexedSeq("locus", "alleles"))
 
     val parsedRoot = Parser.parseAnnotationRoot(root, Annotation.ROW_HEAD)
+    assert(parsedRoot.length == 1)
+    val name = parsedRoot.head
 
     val properties = try {
       val p = new Properties()
@@ -246,6 +274,8 @@ object VEP {
         "--plugin", s"$plugin",
         "-o", "STDOUT")
 
+    val csqHeader = if (csq) getCSQHeaderDefinition(cmd, perl5lib, path).getOrElse("") else ""
+    
     val inputQuery = vepSignature.query("input")
 
     val csqRegex = "CSQ=[^;^\\t]+".r
@@ -330,7 +360,7 @@ object VEP {
       TStruct(
         "locus" -> vsm.rowKeyTypes(0),
         "alleles" -> vsm.rowKeyTypes(1),
-        "vep" -> vepType))
+        name -> vepType))
 
     val vepRowType = vepORVDType.rowType
 
@@ -357,7 +387,12 @@ object VEP {
 
     info(s"vep: annotated ${ annotations.count() } variants")
 
-    vsm.orderedRVDLeftJoinDistinctAndInsert(vepRVD, "vep", product = false)
+    val mt = vsm.orderedRVDLeftJoinDistinctAndInsert(vepRVD, name, product = false)
+    
+    if (csq)
+      mt.annotateGlobal(csqHeader, TString(), name + "_csq_header")
+    else
+      mt
   }
 
   def apply(vsm: MatrixTable, config: String, root: String = "va.vep", csq: Boolean = false, blockSize: Int = 1000): MatrixTable =

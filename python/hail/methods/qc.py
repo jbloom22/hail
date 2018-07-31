@@ -648,6 +648,9 @@ def vep(dataset, config, block_size=1000, name='vep', csq=False) -> MatrixTable:
             variant_class: str
         }
 
+    If csq is ``True``, then the CSQ header string is also added as a global
+    field with name ``name + '_csq_header'``.
+
     Parameters
     ----------
     dataset : :class:`.MatrixTable`
@@ -659,7 +662,7 @@ def vep(dataset, config, block_size=1000, name='vep', csq=False) -> MatrixTable:
     name : :obj:`str`
         Name for resulting row field.
     csq : :obj:`bool`
-        If ``True``, annotates VCF CSQ field as a :py:data:`.tstr`.
+        If ``True``, annotates VCF CSQ field as a :py:data:`.tstr`
         If ``False``, annotates with the full nested struct schema.
 
     Returns
