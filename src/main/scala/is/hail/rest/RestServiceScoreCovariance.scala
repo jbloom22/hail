@@ -148,7 +148,7 @@ class RestServiceScoreCovariance(vds: VariantDataset, covariates: Array[String],
             var i = 0
             var stride = count
             Some(scores.map { score =>
-              val z = score / (sigmaSq * covariance(i))
+              val z = score / math.sqrt(sigmaSq * covariance(i))
               i += stride
               stride -= 1
               2 * Normal.cumulative_standard(-math.abs(z))
