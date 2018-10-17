@@ -5,6 +5,7 @@ import is.hail.stats.RegressionUtils
 import is.hail.variant._
 import is.hail.utils._
 import is.hail.variant.VariantDataset
+import net.sourceforge.jdistlib.Normal
 import org.apache.spark.mllib.linalg.Vectors
 import org.apache.spark.mllib.linalg.distributed.{IndexedRow, IndexedRowMatrix}
 import org.json4s.jackson.Serialization.read
@@ -26,6 +27,8 @@ case class GetResultScoreCovariance(is_error: Boolean,
   error_message: Option[String],
   passback: Option[String],
   active_variants: Option[Array[SingleVariant]],
+  af: Option[Array[Double]],
+  pvals: Option[Array[Double]],
   scores: Option[Array[Double]],
   covariance: Option[Array[Double]],
   sigma_sq: Option[Double],
@@ -42,7 +45,7 @@ class RestServiceScoreCovariance(vds: VariantDataset, covariates: Array[String],
   
   def readText(text: String): GetRequestScoreCovariance = read[GetRequestScoreCovariance](text)
   
-  def getError(message: String, passback: Option[String]) = GetResultScoreCovariance(is_error = true, Some(message), passback, None, None, None, None, None, None)
+  def getError(message: String, passback: Option[String]) = GetResultScoreCovariance(is_error = true, Some(message), passback, None, None, None, None, None, None, None, None)
   
   def getStats(req0: GetRequest): GetResultScoreCovariance = {
     val req = req0.asInstanceOf[GetRequestScoreCovariance]
@@ -84,7 +87,7 @@ class RestServiceScoreCovariance(vds: VariantDataset, covariates: Array[String],
     if (req.count.getOrElse(false)) {
       val count = filteredVds.countVariants().toInt // upper bound as does not account for MAC filtering
       
-      GetResultScoreCovariance(is_error = false, None, req.passback, None, None, None, None, None, Some(count))
+      GetResultScoreCovariance(is_error = false, None, req.passback, None, None, None, None, None, None, None, Some(count))
     } else {
       val (yOpt, cov) = RestService.getYCovAndSetMask(sampleMask, vds, window, yNameOpt, covNames, covVariants,
         useDosages, availableCovariates, availableCovariateToIndex, sampleIndexToPresentness, covariateIndexToValues)
@@ -107,11 +110,15 @@ class RestServiceScoreCovariance(vds: VariantDataset, covariates: Array[String],
 
       val n = cov.rows
       
-      val (xOpt, activeVariants) = ToFilteredCenteredIndexedRowMatrix(filteredVds, n, sampleMask, minMAC, maxMAC)
+      val (xOpt, activeVariants, af) = ToFilteredCenteredIndexedRowMatrix(filteredVds, n, sampleMask, minMAC, maxMAC)
+      
+      val count = activeVariants.length
 
-      if (activeVariants.isEmpty) {
+      if (count == 0) {
         GetResultScoreCovariance(is_error = false, None, req.passback,
           Some(Array.empty[SingleVariant]),
+          Some(Array.empty[Double]),
+          Some(Array.empty[Double]),
           Some(Array.empty[Double]),
           Some(Array.empty[Double]),
           sigmaSqOpt,
@@ -120,7 +127,7 @@ class RestServiceScoreCovariance(vds: VariantDataset, covariates: Array[String],
       } else {
         val limit = req.limit.getOrElse(hardLimit)
         
-        if (activeVariants.length > limit)
+        if (count > limit)
           throw new RestFailure(s"Number of active variants $activeVariants exceeds limit $limit")
 
         val X = xOpt.get.toHailBlockMatrix().cache()
@@ -131,9 +138,23 @@ class RestServiceScoreCovariance(vds: VariantDataset, covariates: Array[String],
         val covarianceOpt =
           if (req.compute_cov.isEmpty || (req.compute_cov.isDefined && req.compute_cov.get)) {
             val covarianceSquare = X.multiply(X.transpose()).toLocalMatrix().toArray
-            Some(RestService.lowerTriangle(covarianceSquare, activeVariants.length))
+            Some(RestService.lowerTriangle(covarianceSquare, count))
           } else
             None
+
+        val pvalsOpt = (scoresOpt, covarianceOpt) match {
+          case (Some(scores), Some(covariance)) =>
+            val sigmaSq = sigmaSqOpt.get
+            var i = 0
+            var stride = count
+            Some(scores.map { score =>
+              val z = score / (sigmaSq * covariance(i))
+              i += stride
+              stride -= 1
+              2 * Normal.cumulative_standard(-math.abs(z))
+            })
+          case _ => None
+        }
         
         X.blocks.unpersist()
 
@@ -142,11 +163,13 @@ class RestServiceScoreCovariance(vds: VariantDataset, covariates: Array[String],
         
         GetResultScoreCovariance(is_error = false, None, req.passback,
           Some(activeSingleVariants),
+          Some(af),
+          pvalsOpt,
           scoresOpt,
           covarianceOpt,
           sigmaSqOpt,
           Some(n),
-          Some(activeVariants.length))
+          Some(count))
       }
     }
   }
@@ -154,7 +177,7 @@ class RestServiceScoreCovariance(vds: VariantDataset, covariates: Array[String],
 
 // n = mask.filter(_).length
 object ToFilteredCenteredIndexedRowMatrix {  
-  def apply(vds: VariantDataset, n: Int, mask: Array[Boolean], minMAC: Int, maxMAC: Int): (Option[IndexedRowMatrix], Array[Variant]) = {
+  def apply(vds: VariantDataset, n: Int, mask: Array[Boolean], minMAC: Int, maxMAC: Int): (Option[IndexedRowMatrix], Array[Variant], Array[Double]) = {
     require(vds.wasSplit)
     
     val filterAC = RestService.makeFilterAC(n, minMAC, maxMAC)
@@ -163,22 +186,22 @@ object ToFilteredCenteredIndexedRowMatrix {
       val (x, ac) = RegressionUtils.hardCallsWithAC(gs, n, mask)
       if (filterAC(ac)) {
         val mu = sum(x) / n // inefficient
-        Some(v, Vectors.dense((x - mu).toArray))
+        Some((v, mu / 2), Vectors.dense((x - mu).toArray))
       } else
         None
     }
 
     // order is preserved from original OrderedRDD
-    val activeVariants = variantVectors.map(_._1).collect()
+    val (activeVariants, af) = variantVectors.map(_._1).collect().unzip
     
     val irmOpt = 
       if (!activeVariants.isEmpty) {
         val reducedIndicesBc = vds.sparkContext.broadcast(activeVariants.index)    
-        val indexedRows = variantVectors.map { case (v, x) => IndexedRow(reducedIndicesBc.value(v), x) }
+        val indexedRows = variantVectors.map { case ((v, _), x) => IndexedRow(reducedIndicesBc.value(v), x) }
         Some(new IndexedRowMatrix(indexedRows, nRows = activeVariants.length, nCols = n))
       } else
         None
 
-    (irmOpt, activeVariants)
+    (irmOpt, activeVariants, af)
   }
 }
